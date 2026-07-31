@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../api';
 import { useNavigate } from 'react-router-dom';
 import { Network, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
@@ -38,7 +38,7 @@ const Discovery = () => {
   const runDiscovery = async () => {
     setLoading(true);
     try {
-      const res = await axios.post('/api/discovery/', { target: activeScanMetadata?.target || target });
+      const res = await api.post('/discovery/', { target: activeScanMetadata?.target || target });
       setDiscoveryInfo(res.data.data);
       setDiscoveryResults(res.data.data);
     } catch (e) {

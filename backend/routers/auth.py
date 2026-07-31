@@ -2,7 +2,6 @@
 Auth router — login and token verification.
 """
 
-import os
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -13,12 +12,9 @@ from pydantic import BaseModel
 
 from db import get_db
 from models import User
+from security import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRE_HOURS
 
 router = APIRouter()
-
-JWT_SECRET = os.getenv("JWT_SECRET", "pnc_secret_key_2026_top_secret")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = 1
 
 
 class LoginRequest(BaseModel):

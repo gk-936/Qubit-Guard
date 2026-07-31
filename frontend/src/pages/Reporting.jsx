@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { sendEmailReport, createSchedule } from '../api';
+import { sendEmailReport, createSchedule, downloadReportPdf, saveBlob } from '../api';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
 
@@ -38,10 +38,15 @@ const Reporting = () => {
     }
   };
 
-  const handleDownloadPDF = () => {
-    showToast('Encrypting and generating official PQC audit...', 'info');
-    const url = `/api/data/report/download-pdf?type=${reportType}`;
-    window.open(url, '_blank');
+  const handleDownloadPDF = async () => {
+    showToast('Generating official PQC audit...', 'info');
+    try {
+      const res = await downloadReportPdf(reportType);
+      saveBlob(res.data, `pqc-audit-${reportType}.pdf`);
+    } catch (e) {
+      console.error('PDF download failed', e);
+      showToast('Could not generate the report PDF.', 'error');
+    }
   };
 
   const handleSaveSchedule = async () => {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useScan } from '../context/ScanContext';
+import { getPQCAlgorithms, getPQCAudit, selectPQCAlgorithm } from '../api';
 
 const PILLAR_OPTIONS = [
   { value: 'Web', label: 'Pillar A — Web/TLS', icon: '🌐' },
@@ -43,37 +44,30 @@ const PQCSelector = () => {
 
   const fetchAlgorithms = async () => {
     try {
-      const res = await fetch('/api/pqc/algorithms');
-      const data = await res.json();
-      if (data.success) setAlgorithms(data.data);
+      const res = await getPQCAlgorithms();
+      if (res.data.success) setAlgorithms(res.data.data);
     } catch (e) { console.error('Failed to fetch algorithms', e); }
   };
 
   const fetchAudit = async () => {
     try {
-      const res = await fetch('/api/pqc/audit');
-      const data = await res.json();
-      if (data.success) setAuditTable(data.data);
+      const res = await getPQCAudit();
+      if (res.data.success) setAuditTable(res.data.data);
     } catch (e) { console.error('Failed to fetch audit', e); }
   };
 
   const runSelection = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/pqc/select', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pillar,
-          bandwidth_kbps: bandwidth,
-          latency_ms: latency,
-          device_type: deviceType,
-          retention_years: retention,
-          compliance,
-        }),
+      const res = await selectPQCAlgorithm({
+        pillar,
+        bandwidth_kbps: bandwidth,
+        latency_ms: latency,
+        device_type: deviceType,
+        retention_years: retention,
+        compliance,
       });
-      const data = await res.json();
-      if (data.success) setResult(data.data);
+      if (res.data.success) setResult(res.data.data);
     } catch (e) {
       console.error('Selection failed', e);
     }

@@ -25,6 +25,22 @@ api.interceptors.request.use((config) => {
   return Promise.reject(error);
 });
 
+// The backend now rejects unauthenticated requests, so an expired token must send
+// the user back to login rather than failing silently on every page. Login itself
+// is excluded — a 401 there is a wrong password, not an expired session.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const isLoginCall = (error.config?.url || '').includes('/auth/login');
+    if (error.response?.status === 401 && !isLoginCall) {
+      localStorage.removeItem('pnc_token');
+      localStorage.removeItem('active_scan_id');
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const checkHealth = () => api.get('/health');
 
 export const runTriadScan = (data) => api.post('/scan/triad', data);
@@ -52,6 +68,23 @@ export const generateRemediation = (findings) => api.post('/remediation/generate
 export const chatWithExpert = (message, history) => api.post('/remediation/chat', { message, history });
 export const sendEmailReport = (data) => api.post('/data/report/send', data);
 export const addInventoryItem = (data) => api.post('/inventory/add', data);
+
+// File downloads must go through the authenticated axios instance — a plain
+// window.open() cannot attach the Authorization header, so it would 401.
+export const exportCbom = (fmt) => api.get(`/data/cbom/export/${fmt}`, { responseType: 'blob' });
+export const downloadReportPdf = (type) =>
+  api.get('/data/report/download-pdf', { params: { type }, responseType: 'blob' });
+
+export const saveBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
 
 export const selectPQCAlgorithm = (metadata) => api.post('/pqc/select', metadata);
 export const getPQCAlgorithms = () => api.get('/pqc/algorithms');

@@ -5,14 +5,19 @@ Qubit-Guard — FastAPI Backend Entry Point
 import os
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 from db import engine, Base
 from seed_data import seed
+from security import require_auth
 from routers import auth, scan, data, remediation, mobile, discovery, scheduler, pqc_selector
+
+# Applied to every router below except /api/auth, so authentication is enforced
+# server-side and not just by the React client.
+PROTECTED = [Depends(require_auth)]
 
 
 @asynccontextmanager
@@ -66,13 +71,13 @@ def health():
 
 # ── Mount Routers ─────────────────────────────────────────────────────────────
 app.include_router(auth.router,        prefix="/api/auth",        tags=["Auth"])
-app.include_router(scan.router,        prefix="/api/scan",        tags=["Scan"])
-app.include_router(data.router,        prefix="/api/data",        tags=["Data"])
-app.include_router(remediation.router, prefix="/api/remediation", tags=["Remediation"])
-app.include_router(discovery.router, prefix="/api/discovery", tags=["discovery"])
-app.include_router(mobile.router,      prefix="/api/mobile",      tags=["Mobile"])
-app.include_router(scheduler.router,   prefix="/api/scheduler",   tags=["Scheduler"])
-app.include_router(pqc_selector.router, prefix="/api/pqc",         tags=["PQC Selector"])
+app.include_router(scan.router,        prefix="/api/scan",        tags=["Scan"],        dependencies=PROTECTED)
+app.include_router(data.router,        prefix="/api/data",        tags=["Data"],        dependencies=PROTECTED)
+app.include_router(remediation.router, prefix="/api/remediation", tags=["Remediation"], dependencies=PROTECTED)
+app.include_router(discovery.router,   prefix="/api/discovery",   tags=["discovery"],   dependencies=PROTECTED)
+app.include_router(mobile.router,      prefix="/api/mobile",      tags=["Mobile"],      dependencies=PROTECTED)
+app.include_router(scheduler.router,   prefix="/api/scheduler",   tags=["Scheduler"],   dependencies=PROTECTED)
+app.include_router(pqc_selector.router, prefix="/api/pqc",        tags=["PQC Selector"], dependencies=PROTECTED)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCbomData } from '../api';
+import { getCbomData, exportCbom, saveBlob } from '../api';
 import { useScan } from '../context/ScanContext';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js';
 import { Doughnut, Bar } from 'react-chartjs-2';
@@ -143,7 +143,14 @@ const CBOM = () => {
           <button
             className="btn btn-gold"
             style={{ padding: '12px 30px', fontWeight: 700 }}
-            onClick={() => window.open('/api/data/cbom/export/json', '_blank')}
+            onClick={async () => {
+              try {
+                const res = await exportCbom('json');
+                saveBlob(res.data, 'cbom-cyclonedx-1.5.json');
+              } catch (e) {
+                console.error('CBOM export failed', e);
+              }
+            }}
           >
             📥 Export CycloneDX v1.5 JSON
           </button>
