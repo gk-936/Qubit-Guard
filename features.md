@@ -1,61 +1,138 @@
 # Qubit-Guard — Prototype Features & Overview
 
-**Qubit-Guard** is a comprehensive cybersecurity platform developed for the Post-Quantum Cryptography (PQC) migration era. This functional prototype provides Punjab National Bank (PNB) with a unified approach to identifying and remediating quantum-vulnerable cryptography.
+**Qubit-Guard** is a cybersecurity prototype for the Post-Quantum Cryptography (PQC)
+migration era. It gives Punjab National Bank (PNB) a unified way to identify
+quantum-vulnerable cryptography across its external attack surface and plan a
+migration path.
+
+Every capability below is tagged with how it actually works:
+
+| Tag | Meaning |
+| :--- | :--- |
+| **LIVE** | A real network call or computation produces the result. |
+| **PARTIAL** | A real probe runs, but part of the stated conclusion is *inferred* rather than directly observed. |
+| **STATIC** | Reference data, templates, or fixed logic. No measurement takes place. |
 
 ---
 
-## 🚀 Working Prototype Functionalities
+## 🚀 Prototype Functionality
 
 ### ⚡ 1. Multi-Pillar PQC Scanning Engine
-While rooted in a "Triad" approach, the platform's core scanning engine categorizes cryptographic exposure across five key infrastructure pillars:
-- **Pillar A (Web/TLS) [LIVE]**: Performs real-time TLS handshake probing via Node.js network sockets to extract live certificate details, issuer info, and RSA/ECC key lengths from target domains.
-- **Pillar B (VPN/TLS) [SIMULATED]**: Demonstrates gateway analysis heuristics to identify vulnerable IKEv1/RSA configurations.
-- **Pillar C (API Security) [LIVE PARSER]**: Decodes and analyzes user-provided JWT tokens to identify quantum-forgeable signing algorithms (e.g., RS256) versus PQC-safe standards.
-- **Pillar D (Firmware Integrity) [MOCK]**: Framework representing stateless hash-based signing analysis (XMSS/LMS) for secure hardware and firmware updates.
-- **Pillar E (Archival Encryption) [MOCK]**: Framework representing BIKE/HQC KEM analysis designed to protect long-term archived data against Harvest-Now-Decrypt-Later (HNDL) attacks.
+The scanning engine categorizes cryptographic exposure across five infrastructure pillars.
+
+- **Pillar A (Web/TLS) [LIVE]**: Performs a real TLS handshake via Python sockets. Reads
+  the live certificate, issuer, cipher suite, TLS version and expiry. The **key exchange**
+  is determined from the protocol and the **authentication algorithm is read from the
+  certificate's public key** using the `cryptography` library — it is *not* guessed from
+  the cipher suite name, which for TLS 1.3 encodes neither.
+- **Pillar B (VPN/TLS) [PARTIAL]**: Real TLS probe plus real TCP connects to IKE ports
+  500 and 4500. Vendor identification is a keyword heuristic over the certificate CN/SAN.
+- **Pillar C (API/JWT) [LIVE]**: Decodes a user-supplied JWT header and classifies the
+  signing algorithm as quantum-forgeable (RS256/ES256) or PQC-safe (ML-DSA OIDs). Also
+  performs a real mTLS handshake check.
+- **Pillar D (Firmware) [PARTIAL]**: Runs a real TLS probe and real HTTP HEAD requests
+  against common firmware/OTA paths. **The firmware-signing verdict is inferred from the
+  organisation's web PKI**, on the assumption that the same CA hierarchy is used for
+  code-signing. No firmware image is retrieved or verified.
+- **Pillar E (Archival) [PARTIAL]**: Real TLS probe and a real check for cloud
+  server-side-encryption headers. **The archival key-wrapping verdict is inferred from the
+  observed TLS key exchange.** No archival system is contacted.
+
+> Pillars that cannot be probed report `N/A` and are excluded from the overall score.
+> They are never assigned an assumed score.
 
 ### 🔍 2. PQC-Aware Asset Discovery
-- **Heuristic Scraping [LIVE]**: Actively crawls target domains to extract visible URLs, automatically bucketing them into `vpn.*`, `api.*`, or `web.*` infrastructure categories based on subdomain signatures.
+- **Certificate Transparency [LIVE]**: Queries `crt.sh` for certificates issued to the
+  target domain to surface subdomains not linked from the site.
+- **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers.
+  Almost always refused in practice, which is the correct result.
+- **Dictionary Probing [LIVE]**: Tries a 95-entry subdomain wordlist. **Every candidate
+  must resolve in DNS before it is reported** — unresolved guesses are discarded, not
+  listed as discovered assets.
+- **Pillar Bucketing [STATIC]**: Discovered hosts are bucketed into Web/VPN/API by
+  hostname keyword (`vpn.*`, `api.*`). This is a naming heuristic, not protocol detection,
+  and is labelled "Inferred" in the output.
 
-### 📦 3. Unified CycloneDX 1.5 CBOM Export
-Generates a structured **Cryptographic Bill of Materials (CBOM)** to meet CERT-In compliance.
-- **JSON Export [LIVE]**: Dynamically generates and allows immediate download of CycloneDX 1.5 formatted JSON files representing the scanned assets and identified algorithms.
+### 📦 3. CycloneDX 1.5 CBOM Export
+- **JSON Export [LIVE]**: Generates a schema-shaped CycloneDX 1.5 document from actual
+  scan findings and discovered assets, downloadable in one click.
+- **Component versions [STATIC]**: Library version fields are placeholders. The CBOM
+  accurately reflects *which* algorithms were observed, not which library versions
+  implement them.
 
 ### 📊 4. Quantum Vulnerability Scoring & Q-Day Simulator
-- **Risk Scoring [LIVE LOGIC]**: Proprietary grading engine that evaluates scan results, aggressively flagging sub-2048 bit RSA keys as critical (100) and recommending ML-KEM/ML-DSA.
-- **HNDL Threat Simulator [UI]**: Visually calculates and demonstrates the "Time To Exposure" (TTE) impact based on Harvest-Now-Decrypt-Later concepts.
+- **QVS Scoring [LIVE LOGIC]**: A fixed severity table (RSA = 100, ECC/ECDSA = 85,
+  Hybrid PQC = 20, full PQC = 0) applied to observed algorithms. The overall score is an
+  unweighted mean of the pillars that were actually assessed. It is a transparent
+  severity mapping, not a statistical model.
+- **HNDL Threat Simulator [UI]**: A client-side visualisation of "Time To Exposure"
+  under Harvest-Now-Decrypt-Later assumptions. Illustrative, driven by the scan's
+  vulnerability count — it is not a forecast.
 
-### 🤖 5. AI-Assisted Remediation Engine (Gemini 2.5 Flash)
-- **Live LLM Integration [LIVE]**: Actively communicates with the Google Gemini 2.5 Flash API to analyze specific, raw Triad scan metrics and generate contextual summaries.
-- **Chatbot & Scripting [LIVE]**: Users can interact with a specialized PQC expert persona to generate customized Bash or Terraform remediation playbooks for immediate deployment.
+### 🤖 5. AI-Assisted Remediation
+- **Remediation Playbooks [STATIC]**: The Bash/Nginx/Python playbooks are expert-authored
+  templates selected by pillar and detected algorithm, with the target domain substituted
+  in. They are deterministic and reviewable — no model generates them.
+- **PQC Expert Chat [LIVE]**: A real API call to **Sarvam AI (`sarvam-105b`)** for
+  interactive Q&A. Without `SARVAM_API_KEY` the chat reports "AI Expert Offline" rather
+  than returning canned text.
 
-### 📱 6. Universal Mobile App Presence Auditor
-- **App Discovery [MOCK]**: Queries the user-provided bank target, generates an inventory of associated mobile applications, and provides a simulated sandbox UI for cryptographic compliance analysis.
+### 📱 6. Mobile App Presence Auditor
+- **iOS Discovery [LIVE]**: Real queries against the iTunes Search API.
+- **Android Discovery [STATIC]**: Android entries are derived from the iOS results.
+  There is no free official Play Store API; these are **not** independent findings.
+- **App TLS Probe [LIVE]**: Candidate API domains are guessed but only reported as
+  reachable after a real TLS handshake succeeds.
 
-### 📅 7. Automated PQC Audit Reporting & Scheduling
-- **Task Scheduling [LIVE]**: Uses a reliable CRON engine to schedule automated "Fresh Scans" triggered precisely at user-designated times.
-- **Automated Dispatch [LIVE]**: Automatically executes the Triad Scan sequence + AI Analysis in the background and dispatches executive summaries directly via SMTP/Gmail integration.
+### 📅 7. Automated Audit Reporting & Scheduling
+- **Task Scheduling [LIVE]**: APScheduler cron jobs, persisted to the database and
+  reloaded at startup, genuinely execute scans at the scheduled time.
+- **PDF Generation [LIVE]**: Real PDF rendering via `reportlab`, with a hand-rolled
+  raw-PDF fallback if `reportlab` fails.
+- **Email Dispatch [LIVE]**: Real SMTP over STARTTLS with an SSL/465 fallback. **If
+  delivery fails or SMTP is unconfigured, the UI says the report was generated but not
+  sent.** It never reports a successful send that did not occur.
 
-### 🛡️ 8. Secure Authentication Access
-- **JWT & Encryption [LIVE]**: Secures the prototype with standard JWT-based state retention and Bcrypt password hashing to protect the primary dashboard routes.
+### 🛡️ 8. Authentication
+- **JWT & Bcrypt [LIVE]**: Bcrypt password verification and HS256 JWTs with a 1-hour
+  expiry. **Enforced server-side** on every route except `/api/auth/*` and `/api/health`.
+  `JWT_SECRET` is required at startup; there is no fallback signing key.
 
-### 🧠 9. PQC Smart Selector (ML Recommendation Engine)
-- **Context-Aware Selection [LIVE]**: Suggests optimal PQC algorithms (e.g., ML-KEM vs. FN-DSA) based on user-defined constraint sliders (bandwidth, latency, and device tier).
-- **Compliance Audit Table [LIVE]**: Connects algorithm recommendations directly to the official DST PQC Roadmap 2026 and CERT-In Annexure-A verifications.
+### 🧠 9. PQC Smart Selector
+- **Constraint-Based Selection [LIVE]**: Recommends an algorithm (ML-KEM, ML-DSA,
+  FN-DSA, SLH-DSA, LMS/XMSS, BIKE/HQC) from pillar, bandwidth, latency, device tier,
+  retention and compliance mandate.
+- **How it works [STATIC]**: A pure-Python decision-tree ensemble over a **140-row
+  hand-authored rule table** encoding published FIPS 203/204/205 parameter sizes and
+  security levels. It is an expert rule set, not a model trained on collected data, and
+  no external dataset is loaded at runtime.
+- **Scan-driven inputs**: Latency is the measured TLS handshake round-trip. Bandwidth is
+  a documented assumption — it is not observable from a handshake — and is labelled as
+  such in the output.
 
-### 📋 10. OWASP Top 10 (2025) Audit Engine 
-- **Risk Mapping [LIVE]**: Instantly compares raw Triad Scan findings against the projected OWASP 2025 cryptographic failure categories. 
-- **Threat Vector Analysis [LIVE]**: Provides detailed attack/prevention strategy cards (e.g., A02:2025 Cryptographic Failures) mapped to relevant NIST standardization guidelines.
+### 📋 10. OWASP Top 10 (2025) Mapping
+- **Risk Mapping [LIVE]**: Maps real Triad findings onto cryptographic-failure categories.
+- **Category Content [STATIC]**: The attack/prevention guidance cards are authored
+  reference text matched by keyword.
 
-### 🗄️ 11. Sovereign Asset Inventory & Scan History
-- **Asset Management [LIVE]**: A localized system to filter, manually add, and securely manage cryptographic components (Software, VPNs, APIs) with associated risk ratings.
-- **Audit Trails [LIVE]**: Maintains historical logs of all Triad Scans executed, allowing compliance officers to view temporal progress directly from the dashboard.
+### 🗄️ 11. Asset Inventory & Scan History
+- **Asset Management [LIVE]**: Filter, manually add and delete cryptographic components
+  with risk ratings.
+- **Audit Trails [LIVE]**: Every Triad scan is persisted and replayable from the dashboard.
+- **Known limitation**: The database ships with seeded demonstration rows that are not
+  yet distinguishable from scan-derived rows. Treat dashboard aggregates as
+  demonstration data until a real scan has been run.
 
 ---
 
 ## 🛠 Technology Stack
-- **Frontend**: React 18, Chart.js, Vanilla CSS.
-- **Backend / Scanning**: Node.js (Express, TLS, Axios).
-- **AI Integration**: Google Generative AI (Gemini 2.5 Flash).
-- **Database**: Local JSON Persistence for lightweight prototype portability.
-- **Standards Applied**: NIST FIPS 203, FIPS 204, CycloneDX 1.5.
+- **Frontend**: React 18 (Vite), Chart.js, vanilla CSS.
+- **Backend**: Python 3.9+, FastAPI, Uvicorn.
+- **Scanning**: Python `ssl` / `socket` / `urllib`, `cryptography`, `dnspython`.
+- **AI Integration**: Sarvam AI (`sarvam-105b`) via `httpx`, chat only.
+- **Scheduling**: APScheduler. **Reporting**: reportlab, smtplib.
+- **Database**: SQLite via SQLAlchemy.
+- **Standards Referenced**: NIST FIPS 203 / 204 / 205, NIST SP 800-208, CycloneDX 1.5.
+
+> A superseded Node.js/Express implementation still exists under `backend/routes/` and
+> `backend/services/*.js`. It is dead code and is not executed.

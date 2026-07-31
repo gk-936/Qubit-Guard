@@ -1,110 +1,197 @@
 # Qubit-Guard: Platform Presentation Guide
 
-This document outlines the core aspects to be presented to the PNB evaluator for each window of the Qubit-Guard platform. The primary focus is on Post-Quantum Cryptography (PQC), the Triad Scanning engine, the 6 PQC algorithms implemented, and the proprietary ML dataset.
+This document outlines what to present to the PNB evaluator for each window of the
+Qubit-Guard platform: the Triad Scanning engine, the 6 PQC algorithm families the
+platform tracks, and the constraint-based PQC Selector.
+
+**Presenter's note.** Where a window mixes measured data with inferred or reference
+content, this guide says so explicitly. Claim what the platform measures — it is a
+stronger position than overclaiming, and the distinction is visible in the UI and the
+source, so it will not survive a direct question otherwise.
 
 ## 📊 Overview of Windows & Important Functionalities
 
 ---
 
 ### 1. Dashboard (Home)
-- **Features**: High-level visual summary of the organization's Quantum Vulnerability Score (QVS), real-time alerts, and executive summary metrics.
-- **Important Functionalities**: Aggregates data from all scanners to show the immediate risk posture. The entry point for CISO-level stakeholders to gauge immediate exposure.
-- **Focus**: Highlights the transition progress from legacy RSA/ECC to Quantum-Safe algorithms.
+- **Features**: High-level summary of the Quantum Vulnerability Score (QVS), alerts, and
+  executive metrics.
+- **Important Functionalities**: Aggregates scan data into an immediate risk posture. The
+  entry point for CISO-level stakeholders.
+- **Focus**: Progress from legacy RSA/ECC toward quantum-safe algorithms.
+- **Say this**: The database ships with seeded demonstration rows. Run a live scan first
+  so the dashboard reflects measured data.
 
 ### 2. Asset Inventory
-- **Features**: Centralized management of all discovered network assets categorized by "Pillars" (Web, VPN, API, Mobile, Firmware, Archival).
-- **Important Functionalities**: Displays current cryptographic protocols and cipher suites associated with each asset, flag vulnerable endpoints, and allows manual categorization.
+- **Features**: Centralised management of discovered assets by pillar (Web, VPN, API,
+  Mobile, Firmware, Archival).
+- **Important Functionalities**: Shows the cryptographic protocols and cipher suites
+  observed per asset, flags vulnerable endpoints, allows manual categorisation.
 
 ### 3. Asset Discovery
-- **Features**: Automated network mapping and asset identification.
-- **Important Functionalities**: Goes beyond simple port scanning by actively probing targets for TLS 1.3 support (a critical prerequisite for modern PQC hybrid ciphers). Automatically buckets targets into appropriate pillars.
+- **Features**: Automated external asset mapping.
+- **Important Functionalities**: Queries Certificate Transparency logs (`crt.sh`),
+  attempts DNS zone transfer, and probes a 95-entry subdomain wordlist. **Candidates are
+  reported only if they resolve in DNS** — guesses that do not resolve are discarded
+  rather than presented as discoveries. Probes targets for TLS 1.3 support, a
+  prerequisite for hybrid PQC ciphers.
+- **Say this**: Pillar bucketing (`vpn.*`, `api.*`) is a naming heuristic and is labelled
+  "Inferred" in the output — it is not protocol detection.
 
 ### 4. CBOM (Cryptographic Bill of Materials)
-- **Features**: Detailed ledger of all cryptographic artifacts utilized across the enterprise.
-- **Important Functionalities**: Generates a unified CycloneDX 1.5 CBOM. Captures metadata like bit-size (e.g., 2048-bit), cipher mode, and PQC-safe status. Offers multi-format export (JSON, XML, CSV) to satisfy CERT-In Annexure-A compliance.
+- **Features**: Ledger of cryptographic artefacts across the scanned surface.
+- **Important Functionalities**: Generates a CycloneDX 1.5 CBOM capturing algorithm,
+  bit-size, cipher mode and PQC-safe status, exportable to satisfy CERT-In Annexure-A
+  workflows.
+- **Say this**: The CBOM is authoritative about *algorithms observed*. Library version
+  fields are placeholders.
 
 ### 5. Posture of PQC
-- **Features**: Granular analytics on cryptographic migration progress.
-- **Important Functionalities**: Visualizes the distribution of vulnerable vs. safe algorithms. Tracks organizational compliance against the DST PQC Migration Roadmap.
+- **Features**: Analytics on migration progress.
+- **Important Functionalities**: Distribution of vulnerable versus safe algorithms,
+  tracked against the DST PQC Migration Roadmap. Shows `N/A` where no pillar could be
+  assessed rather than substituting a placeholder score.
 
 ### 6. Cyber Rating (QVS)
-- **Features**: Proprietary risk weighting system (0–100 scale).
-- **Important Functionalities**: Quantifies quantum risk: RSA scores a critical 100, ECC at 85, Hybrid PQC at 20, and full ML-KEM/ML-DSA arrays score 0. Helps prioritize remediation efforts mathematically.
+- **Features**: 0–100 risk scale.
+- **Important Functionalities**: Quantifies quantum risk — RSA scores 100, ECC/ECDSA 85,
+  hybrid PQC 20, full ML-KEM/ML-DSA 0. Overall score is an unweighted mean of the pillars
+  actually assessed.
+- **Say this**: This is a transparent, auditable severity mapping — every input and
+  threshold is inspectable. It is deliberately not a black-box model.
 
 ### 7. Reporting
-- **Features**: Automated, comprehensive audit report generation.
-- **Important Functionalities**: Compiles Triad scan results, CBOMs, and QVS ratings into a structured PDF. Integrates with SMTP (Gmail deployment) for automated dispatch directly to the evaluator/CISO inbox.
+- **Features**: Audit report generation and dispatch.
+- **Important Functionalities**: Compiles Triad results, CBOM and QVS into a PDF
+  (rendered with `reportlab`) and dispatches it over SMTP.
+- **Say this**: If SMTP is unconfigured or blocked, the UI states that the report was
+  generated but **not** sent, and offers Download PDF. There is no fallback that claims
+  a successful send.
 
 ### 8. Triad Scanner (Core Engine)
-- **Features**: The heart of Qubit-Guard, examining critical attack surfaces concurrently.
+- **Features**: The core engine, examining five attack surfaces.
 - **Important Functionalities**:
-  - **Pillar A (Web/TLS)**: Real-time TLS handshake probing on web servers (e.g., Nginx, Apache) to detect legacy certificates.
-  - **Pillar B (VPN/TLS)**: Analysis of VPN gateway protocols (IKEv2, SSL-VPN) for RFC 9370 multi-key exchange support.
-  - **Pillar C (API Security)**: An interactive JWT token and mTLS validation sandbox to identify quantum-forgeable signing algorithms (RS256, ES256).
+  - **Pillar A (Web/TLS)** — *measured*. Real TLS handshake. Key exchange is derived from
+    the protocol and the signature algorithm is **read from the certificate's public key**.
+    It is not inferred from the cipher suite name, which for TLS 1.3 encodes neither.
+  - **Pillar B (VPN/TLS)** — *measured*: real TLS probe plus real connects to IKE ports
+    500/4500. *Inferred*: vendor, by keyword on the certificate CN/SAN.
+  - **Pillar C (API Security)** — *measured*: JWT header decoded and classified
+    (RS256/ES256 versus ML-DSA OIDs); real mTLS check.
+  - **Pillar D (Firmware)** and **Pillar E (Archival)** — real probes run, but the
+    headline verdicts are **inferred** from the organisation's web PKI and observed TLS
+    key exchange respectively. No firmware image or archival system is inspected.
+- **Say this**: A pillar that cannot be probed reports `N/A` and is excluded from the
+  score. Nothing is assumed on a host that was never reached.
 
 ### 9. Mobile App Scanning
-- **Features**: Verifies the authenticity of PNB applications in the mobile ecosystem.
-- **Important Functionalities**: Identifies official vs. cloned apps, defending against unauthorized rogue distribution and ensuring mobile pillar integrity.
+- **Features**: Verifies PNB's mobile app presence.
+- **Important Functionalities**: Real iTunes Search API queries identify official versus
+  unrecognised iOS apps. Candidate app API domains are confirmed only by a real TLS
+  handshake.
+- **Say this**: Android entries are derived from the iOS results — there is no free
+  official Play Store API, so they are not independent findings.
 
 ### 10. Auto-Remediation
 - **Features**: Step-by-step resolution of identified vulnerabilities.
-- **Important Functionalities**: Powered by Google Gemini. Provides interactive chat and generates context-aware, deployment-ready copy-paste code snippets for Nginx hardening, OpenVPN patches, and Python-based JWT migration (e.g., upgrading to ML-DSA).
+- **Important Functionalities**: Generates deployment-ready Nginx hardening, OpenVPN and
+  JWT-migration snippets. These are **expert-authored templates**, selected by pillar and
+  detected algorithm — deterministic and reviewable, which is what you want in a
+  remediation path. An interactive **Sarvam AI (`sarvam-105b`)** chat handles open-ended
+  PQC questions alongside them.
 
 ### 11. Q-Day Simulation
-- **Features**: Interactive "Harvest-Now-Decrypt-Later" (HNDL) visualizer.
-- **Important Functionalities**: Calculates "Time To Exposure" (TTE) based on current risk scores, tangibly demonstrating the business impact of quantum threats to executive decision-makers.
+- **Features**: Interactive Harvest-Now-Decrypt-Later visualiser.
+- **Important Functionalities**: Illustrates "Time To Exposure" from the scan's
+  vulnerability count, to make quantum risk tangible for executives.
+- **Say this**: Presented as a visualisation, not a forecast.
 
 ### 12. PQC Selector (Smart Engine)
-- **Features**: An ML-based Smart Selector for optimal algorithm assignment.
-- **Important Functionalities**: Takes inputs like bandwidth (kbps), latency (ms), device type, retention period, and compliance mandate to recommend the mathematically optimal PQC algorithm with confidence scoring.
+- **Features**: Constraint-based algorithm selection.
+- **Important Functionalities**: Takes bandwidth, latency, device type, retention period
+  and compliance mandate, and recommends the appropriate PQC algorithm with a confidence
+  score. Latency is the **measured** TLS handshake round-trip from the scan; bandwidth is
+  a documented assumption and labelled as one in the output.
 
 ---
 
-## 🧠 ML Dataset Details
+## 🧠 How the PQC Selector Decides
 
-The **PQC Selector** is powered by a pure-Python Random Forest classifier trained on a highly relevant, localized dataset to ensure optimal performance in Indian network environments:
-- **Dataset Composition**: Sovereign Indian datasets modeled on **AIKosh network profiles** (IndiaAI Datasets Platform), mapping Indian ISP bandwidth and latency constraints (e.g., Jio Fiber vs. BSNL rural).
-- **Benchmarks**: Integrated with **DST National PQC Testing & Certification Program (2026)** performance benchmarks.
-- **Behavioral Data**: Weighted according to **I4C Cybercrime behavioral patterns**.
+The Selector is a pure-Python decision-tree ensemble over a **140-row hand-authored rule
+table**. Each row encodes published algorithm characteristics — key and signature sizes
+and security levels from **NIST FIPS 203 / 204 / 205** — mapped to deployment
+constraints. No external dataset is loaded at runtime and no model is trained on
+collected data.
+
+**This is a strength worth stating directly.** PQC algorithm selection is a
+constraint-satisfaction problem, not a prediction problem: given bandwidth, latency,
+device tier and security level, the correct algorithm is *derivable* from published
+parameter sizes. There is no hidden pattern for a model to learn. A transparent rule set
+whose every threshold can be traced to a NIST parameter table is more defensible in a
+compliance context than a statistical model would be.
+
+Useful reference sources if you extend it: NIST FIPS 203/204/205 parameter tables,
+liboqs benchmarks for server-class timings, and pqm4 for ARM Cortex-M4 timings behind
+the device-tier constraint.
 
 ---
 
-## 🔐 The 6 PQC Algorithms & Triad Focus
+## 🔐 The 6 PQC Algorithm Families & Triad Focus
 
-The platform implements 6 distinct families of algorithms to secure the Triad.
+The platform maintains a **reference registry** of six algorithm families — their
+parameter sets, key and signature sizes, security levels and OIDs — and maps each to the
+pillar it should protect. The registry drives recommendations, CBOM classification and
+the audit table.
+
+> **Be precise on this point**: the platform *identifies, classifies and recommends*
+> these algorithms. It does not perform PQC key generation, signing or encapsulation —
+> there is no liboqs or equivalent binding in the codebase. It is an assessment and
+> migration-planning tool, not a crypto library.
 
 ### 1. ML-KEM (Kyber)
-- **Use Case**: Key Establishment in Web/TLS and VPN/TLS (Pillars A & B).
-- **Benefits**: FIPS 203 finalized. Extremely fast key exchange with relatively small ciphertext sizes for lattice schemes, making it ideal for standard web traffic.
-- **Drawbacks**: Potentially vulnerable to specific hardware-level side-channel attacks.
-- **Future Mitigation**: Addressed via constant-time software implementations and hardware masking techniques.
+- **Use Case**: Key establishment in Web/TLS and VPN/TLS (Pillars A & B).
+- **Benefits**: FIPS 203 finalized. Fast key exchange with relatively small ciphertexts
+  for a lattice scheme, ideal for standard web traffic.
+- **Drawbacks**: Sensitive to certain hardware-level side-channel attacks.
+- **Future Mitigation**: Constant-time implementations and hardware masking.
 
 ### 2. ML-DSA (Dilithium)
-- **Use Case**: General Digital Signatures for APIs and Authentication (Pillar C).
-- **Benefits**: FIPS 204 finalized. Highly secure and offers very fast verification times.
-- **Drawbacks**: Signature sizes are significantly larger than legacy ECC, which can impact latency on low-bandwidth connections.
-- **Future Mitigation**: Implementation of advanced header compression algorithms and caching mechanisms in TLS 1.3 to reduce transmission overhead.
+- **Use Case**: General digital signatures for APIs and authentication (Pillar C).
+- **Benefits**: FIPS 204 finalized. Highly secure with fast verification.
+- **Drawbacks**: Signatures are significantly larger than ECC, which affects latency on
+  low-bandwidth links.
+- **Future Mitigation**: Certificate compression and caching in TLS 1.3 to reduce
+  transmission overhead.
 
-### 3. SLH-DSA (Sphincs+)
-- **Use Case**: Highly conservative backup signing for high-value transactions (Pillar C).
-- **Benefits**: Relies strictly on established hash functions rather than lattice assumptions. If lattice cryptography is ever broken, SLH-DSA remains mathematically secure.
-- **Drawbacks**: Extremely large signature sizes and very slow performance.
-- **Future Mitigation**: Relegated strictly as a "fallback" or "backup" mechanism for high-value HSM (Hardware Security Module) validations where speed is secondary to ultimate security.
+### 3. SLH-DSA (SPHINCS+)
+- **Use Case**: Conservative backup signing for high-value transactions (Pillar C).
+- **Benefits**: FIPS 205 finalized. Relies only on hash-function security — if lattice
+  assumptions are ever broken, SLH-DSA still stands.
+- **Drawbacks**: Very large signatures and slow signing.
+- **Future Mitigation**: Reserved as a fallback for high-value HSM validations where
+  security margin outweighs speed.
 
 ### 4. FN-DSA (Falcon)
-- **Use Case**: Compact signatures for Mobile constraints (Mobile/App Pillar).
-- **Benefits**: Offers the smallest signature sizes among lattice-based schemes, making it perfect for mobile devices with restricted bandwidth.
-- **Drawbacks**: Highly complex to implement securely due to its reliance on floating-point arithmetic.
-- **Future Mitigation**: Development of hardware-accelerated CPU instructions and rigorous constant-time float replacements to prevent algorithmic timing attacks.
+- **Use Case**: Compact signatures under mobile constraints (Mobile pillar).
+- **Benefits**: Smallest signatures among lattice schemes — well suited to constrained
+  bandwidth.
+- **Drawbacks**: Difficult to implement securely because of floating-point arithmetic.
+- **Future Mitigation**: Hardware acceleration and constant-time float replacements to
+  prevent timing attacks.
 
 ### 5. XMSS / LMS (Stateful Hash-Based)
-- **Use Case**: System and Firmware Integrity (Firmware Pillar).
-- **Benefits**: Finalized via NIST SP 800-208. Mathematically proven security for code-signing, ensuring firmware updates cannot be quantum-forged.
-- **Drawbacks**: Highly sensitive to "state management." Reusing a state (key index) completely breaks the security.
-- **Future Mitigation**: Deployment within secure hardware enclaves employing strict, unalterable monotonic counters to physically prevent state reuse.
+- **Use Case**: System and firmware integrity (Firmware pillar).
+- **Benefits**: Standardised in NIST SP 800-208. Well-understood security for
+  code-signing, so firmware updates cannot be quantum-forged.
+- **Drawbacks**: Highly sensitive to state management — reusing a key index breaks
+  security completely.
+- **Future Mitigation**: Deployment inside secure enclaves with monotonic counters to
+  physically prevent state reuse.
 
 ### 6. BIKE / HQC (Code-Based KEMs)
-- **Use Case**: Archival and Long-Term Storage Encryption (Archival Pillar).
-- **Benefits**: Based on error-correcting codes, offering a completely different hardness assumption than lattices. Provides excellent conservatism for data requiring decades-long retention protection.
-- **Drawbacks**: Manifests larger public keys and slower key generation times compared to ML-KEM.
-- **Future Mitigation**: Smooth integration directly into asynchronous, offline archival storage workflows where real-time latency optimization is not the primarily required metric.
+- **Use Case**: Archival and long-term storage encryption (Archival pillar).
+- **Benefits**: Based on error-correcting codes — a different hardness assumption from
+  lattices, giving useful diversity for decades-long retention.
+- **Drawbacks**: Larger public keys and slower key generation than ML-KEM.
+- **Future Mitigation**: Suited to asynchronous, offline archival workflows where
+  real-time latency is not the binding constraint.

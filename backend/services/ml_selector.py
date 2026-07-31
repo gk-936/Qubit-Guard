@@ -72,18 +72,19 @@ COMPLIANCE_MAP = {
     "certin": 0,
 }
 
-# ── Sovereign Training Data (200 rows) ───────────────────────────────────────
+# ── Rule Table ───────────────────────────────────────────────────────────────
 # Format: (pillar_idx, bandwidth_kbps, latency_ms, device_idx,
 #           retention_years, compliance_idx, label_idx)
-# Derived from AIKosh Indian ISP profiles (Jio Fiber avg 100Mbps/4ms,
-# BSNL rural avg 10Mbps/45ms, Airtel 4G avg 30Mbps/25ms)
+# The bandwidth/latency figures are representative network tiers chosen by hand
+# to span the range (fibre / broadband / rural / mobile). They are illustrative
+# constraint boundaries, not measurements from any ISP dataset.
 
 TRAINING_DATA = [
     # ── Web/TLS (pillar=0): ML-KEM for key exchange ──
-    (0, 100000, 4, 0, 1, 0, 0),    # Jio Fiber server → ML-KEM-768
+    (0, 100000, 4, 0, 1, 0, 0),    # High-BW fibre server → ML-KEM-768
     (0, 100000, 3, 0, 1, 2, 0),    # High-BW server NIST → ML-KEM-768
     (0, 50000, 8, 0, 1, 0, 0),     # Decent BW server → ML-KEM-768
-    (0, 10000, 45, 0, 1, 0, 11),   # BSNL rural server → ML-KEM-512 (low BW)
+    (0, 10000, 45, 0, 1, 0, 11),   # Low-BW rural server → ML-KEM-512 (low BW)
     (0, 5000, 80, 0, 1, 0, 11),    # Very low BW → ML-KEM-512
     (0, 200000, 2, 0, 5, 1, 1),    # Ultra-high BW, long retention → ML-KEM-1024
     (0, 150000, 3, 0, 3, 0, 1),    # High BW CERT-In → ML-KEM-1024
@@ -102,7 +103,7 @@ TRAINING_DATA = [
     (0, 95000, 5, 0, 1, 0, 0),
 
     # ── VPN/TLS (pillar=1): ML-KEM for tunnel key exchange ──
-    (1, 100000, 4, 0, 1, 0, 0),    # Jio server VPN → ML-KEM-768
+    (1, 100000, 4, 0, 1, 0, 0),    # High-BW fibre VPN → ML-KEM-768
     (1, 50000, 10, 0, 1, 0, 0),    # Standard VPN → ML-KEM-768
     (1, 10000, 40, 0, 1, 0, 11),   # Low BW VPN → ML-KEM-512
     (1, 200000, 2, 0, 5, 1, 1),    # High-sec VPN → ML-KEM-1024
@@ -146,8 +147,8 @@ TRAINING_DATA = [
     (2, 85000, 6, 0, 1, 0, 2),
 
     # ── Mobile/App (pillar=3): FN-DSA for compact signatures ──
-    (3, 30000, 25, 1, 1, 0, 5),    # Airtel 4G → FN-DSA-512
-    (3, 10000, 50, 1, 1, 0, 5),    # BSNL 4G → FN-DSA-512
+    (3, 30000, 25, 1, 1, 0, 5),    # Mid-BW mobile → FN-DSA-512
+    (3, 10000, 50, 1, 1, 0, 5),    # Low-BW mobile → FN-DSA-512
     (3, 50000, 15, 1, 1, 0, 5),    # Wi-Fi mobile → FN-DSA-512
     (3, 5000, 80, 1, 1, 0, 5),     # 3G fallback → FN-DSA-512
     (3, 100000, 5, 1, 3, 1, 6),    # High-BW mobile, RBI → FN-DSA-1024
@@ -224,14 +225,14 @@ TRAINING_DATA = [
     (2, 200000, 2, 0, 1, 0, 3),    # High BW API → ML-DSA-87
 
     # ── Additional Indian network profiles ──
-    (0, 75000, 7, 0, 1, 0, 0),     # Airtel Fiber → ML-KEM-768
-    (0, 12000, 42, 0, 1, 0, 11),   # BSNL broadband → ML-KEM-512
-    (1, 75000, 7, 0, 1, 0, 0),     # Airtel VPN → ML-KEM-768
-    (1, 12000, 42, 0, 1, 0, 11),   # BSNL VPN → ML-KEM-512
-    (2, 75000, 7, 0, 1, 0, 2),     # Airtel API → ML-DSA-65
-    (3, 12000, 42, 1, 1, 0, 5),    # BSNL mobile → FN-DSA-512
-    (2, 12000, 42, 0, 1, 0, 2),    # BSNL API → ML-DSA-65
-    (3, 75000, 7, 1, 1, 0, 5),     # Airtel mobile → FN-DSA-512
+    (0, 75000, 7, 0, 1, 0, 0),     # Mid-BWFiber → ML-KEM-768
+    (0, 12000, 42, 0, 1, 0, 11),   # Low-BWbroadband → ML-KEM-512
+    (1, 75000, 7, 0, 1, 0, 0),     # Mid-BWVPN → ML-KEM-768
+    (1, 12000, 42, 0, 1, 0, 11),   # Low-BWVPN → ML-KEM-512
+    (2, 75000, 7, 0, 1, 0, 2),     # Mid-BWAPI → ML-DSA-65
+    (3, 12000, 42, 1, 1, 0, 5),    # Low-BWmobile → FN-DSA-512
+    (2, 12000, 42, 0, 1, 0, 2),    # Low-BWAPI → ML-DSA-65
+    (3, 75000, 7, 1, 1, 0, 5),     # Mid-BWmobile → FN-DSA-512
     (0, 55000, 9, 0, 1, 0, 0),     # ACT Fiber → ML-KEM-768
     (1, 55000, 9, 0, 1, 0, 0),     # ACT VPN → ML-KEM-768
 ]
