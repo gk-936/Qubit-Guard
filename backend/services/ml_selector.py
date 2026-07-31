@@ -1,8 +1,9 @@
 """
-ML-Based PQC Algorithm Smart Selector.
+Rule-Based PQC Algorithm Smart Selector.
 
-Pure-Python Random Forest classifier that selects the optimal PQC algorithm
-for a given scan environment based on:
+Pure-Python deterministic decision-tree ensemble, walking a hand-authored
+140-row rule table, that selects the optimal PQC algorithm for a given scan
+environment based on:
   - Pillar Type (Web, VPN, API, Mobile, Firmware, Archival)
   - Bandwidth Constraints (kbps)
   - Latency Sensitivity (ms)
@@ -79,7 +80,7 @@ COMPLIANCE_MAP = {
 # to span the range (fibre / broadband / rural / mobile). They are illustrative
 # constraint boundaries, not measurements from any ISP dataset.
 
-TRAINING_DATA = [
+RULE_TABLE = [
     # ── Web/TLS (pillar=0): ML-KEM for key exchange ──
     (0, 100000, 4, 0, 1, 0, 0),    # High-BW fibre server → ML-KEM-768
     (0, 100000, 3, 0, 1, 2, 0),    # High-BW server NIST → ML-KEM-768
@@ -320,8 +321,13 @@ def _build_tree(data: list, n_features: int, max_depth: int, depth: int = 0) -> 
     return _DecisionNode(feature=feat, threshold=thresh, left=left_node, right=right_node)
 
 
-class _RandomForest:
-    """Minimal Random Forest with deterministic bagging."""
+class _RuleTreeEnsemble:
+    """Deterministic decision-tree ensemble over a hand-authored rule table.
+
+    Each tree is built from a deterministic strided subset of the rule table
+    (not a random bootstrap sample), so results are fully reproducible: the
+    same inputs always walk the same tree paths and produce the same vote.
+    """
 
     def __init__(self, n_trees: int = 3, max_depth: int = 6):
         self.n_trees = n_trees
@@ -329,10 +335,12 @@ class _RandomForest:
         self.trees: list[_DecisionNode] = []
 
     def fit(self, data: list, n_features: int):
-        """Train forest with deterministic bootstrap samples."""
+        """Build ensemble trees from deterministic strided subsets of the rule table."""
         n = len(data)
         for i in range(self.n_trees):
-            # Deterministic bootstrap: offset stride
+            # Deterministic stride sampling (not bootstrap/bagging): the
+            # offset and stride vary per tree so each tree sees a different
+            # deterministic ordering of the same rule table.
             stride = max(1, n // (self.n_trees + i))
             sample = [data[(j * stride + i * 7) % n] for j in range(n)]
             tree = _build_tree(sample, n_features, self.max_depth)
@@ -349,10 +357,10 @@ class _RandomForest:
         return winner, confidence
 
 
-# ── Train the model at import time (deterministic, fast) ──────────────────────
+# ── Build the ensemble at import time (deterministic, fast) ───────────────────
 
-_model = _RandomForest(n_trees=3, max_depth=6)
-_model.fit(TRAINING_DATA, n_features=6)
+_model = _RuleTreeEnsemble(n_trees=3, max_depth=6)
+_model.fit(RULE_TABLE, n_features=6)
 
 
 # ── Feature Descriptions (for Selector_Log) ──────────────────────────────────
@@ -414,7 +422,7 @@ def select_algorithm(
     )
 
     selector_log = (
-        f"Algorithm [{algorithm}] selected via ML Model based on "
+        f"Algorithm [{algorithm}] selected via rule-based decision-tree ensemble based on "
         f"[{network_chars}]."
     )
 
@@ -461,10 +469,10 @@ def select_algorithm(
             "compliance": compliance_name,
         },
         "model_info": {
-            "type": "Random Forest",
+            "type": "Deterministic Decision-Tree Ensemble",
             "n_trees": _model.n_trees,
             "max_depth": _model.max_depth,
-            "training_samples": len(TRAINING_DATA),
+            "training_samples": len(RULE_TABLE),
             "training_source": "Hand-authored rule table derived from NIST FIPS 203/204/205 parameter sets",
             "external_dataset": False,
         },
