@@ -134,5 +134,5 @@ The scanning engine categorizes cryptographic exposure across five infrastructur
 - **Database**: SQLite via SQLAlchemy.
 - **Standards Referenced**: NIST FIPS 203 / 204 / 205, NIST SP 800-208, CycloneDX 1.5.
 
-> A superseded Node.js/Express implementation still exists under `backend/routes/` and
-> `backend/services/*.js`. It is dead code and is not executed.
+> The backend was originally written in Node.js/Express and later rewritten in Python.
+> The superseded implementation has been removed; `backend/main.py` is the only entry point.

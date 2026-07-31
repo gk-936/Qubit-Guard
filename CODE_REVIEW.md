@@ -27,7 +27,9 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 13 | Docs say Gemini, code uses Sarvam | ✅ Fixed |
 | 26 | `test_results.md` self-graded 95/100 | ✅ Rewritten |
 | 27 | `functionalities.md` / `content.md` overclaim | ✅ Rewritten |
-| 6, 8–12, 14, 15, 17–25 | — | Open |
+| 20 | Dead Node/Express codebase | ✅ Deleted |
+| 21 | Other dead code (`entropy.py`, stale JSON) | ✅ Deleted |
+| 6, 8–12, 14, 15, 17–19, 22–25 | — | Open |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
