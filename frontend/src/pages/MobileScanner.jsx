@@ -87,7 +87,14 @@ const MobileScanner = () => {
             <tbody>
               {apps.map((app, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 700 }}>{app.name}</td>
+                  <td style={{ fontWeight: 700 }}>
+                    {app.name}
+                    {app.source === 'derived-from-ios' && (
+                      <div style={{ fontSize: '10px', fontWeight: 500, color: '#a66a00' }} title={app.note}>
+                        ⚠ inferred from iOS listing — not independently verified
+                      </div>
+                    )}
+                  </td>
                   <td style={{ color: app.platform === 'Android' ? '#A4C639' : '#555' }}>
                     {app.platform === 'Android' ? '🤖 Android' : '🍏 iOS'}
                   </td>
@@ -141,8 +148,17 @@ const MobileScanner = () => {
               </div>
               <div style={{ textAlign: 'center', borderLeft: '1px solid #eee', paddingLeft: '20px' }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#888', letterSpacing: '2px' }}>MOBILE PQC SCORE</div>
-                <div style={{ fontSize: '64px', fontWeight: 700, color: scanResult.pqc_score > 70 ? '#1A8A1A' : '#C0272D' }}>{scanResult.pqc_score}</div>
-                <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NEEDS TRANSITION</div>
+                {scanResult.pqc_score === null || scanResult.pqc_score === undefined ? (
+                  <>
+                    <div style={{ fontSize: '40px', fontWeight: 700, color: '#888' }}>N/A</div>
+                    <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NOT ASSESSED</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '64px', fontWeight: 700, color: scanResult.pqc_score > 70 ? '#1A8A1A' : '#C0272D' }}>{scanResult.pqc_score}</div>
+                    <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NEEDS TRANSITION</div>
+                  </>
+                )}
                 <button className="btn btn-outline btn-sm" onClick={() => navigate('/remediation')} style={{ marginTop: '20px', display: 'block', width: '100%' }}>View Remediation Code</button>
               </div>
             </div>

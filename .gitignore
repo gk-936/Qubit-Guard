@@ -32,6 +32,11 @@ frontend/build/
 *.db
 *.sqlite3
 backend/database/*.db
+# WAL journal sidecar files, created once SQLite runs in WAL mode
+backend/database/*.db-wal
+backend/database/*.db-shm
+*.db-wal
+*.db-shm
 backend/logs/*.log
 *.log
 npm-debug.log*

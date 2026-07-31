@@ -45,27 +45,31 @@ def search_mobile_apps(query: str = "") -> list:
                     "platform": "iOS",
                     "status": status,
                     "rating": item.get("averageUserRating", 0),
-                    "developer": item.get("artistName", "Unknown")
+                    "developer": item.get("artistName", "Unknown"),
+                    "source": "itunes-search",
                 })
     except Exception as e:
         print(f"[DISCOVERY] iTunes search failed: {e}")
         # Fallback to a minimal set if API is down, but marked as offline
         pass
 
-    # Android: Since Play Store doesn't have a public search API without scraping,
-    # we simulate the Android counterparts for the found iOS apps to maintain Triad coverage
+    # Android: There is no free official Play Store search API, so real Android
+    # discovery is not available here. Rather than fabricate independent Android
+    # results, we derive a *labelled guess* from each verified iOS listing (most
+    # banks reuse the same reverse-domain package ID across platforms) and mark it
+    # explicitly so no consumer can mistake it for an independently verified finding.
     android_results = []
     for app in results:
-        # Most major banks use a reverse-domain ID for both platforms
-        # We can 'discover' the likely Android ID by checking the iOS bundle ID
         android_results.append({
             "id": app["id"],
-                    "name": app["name"],
-                    "platform": "Android",
-                    "status": app["status"],
-                    "rating": app["rating"],
-                    "developer": app["developer"]
-                })
+            "name": app["name"],
+            "platform": "Android",
+            "status": app["status"],
+            "rating": app["rating"],
+            "developer": app["developer"],
+            "source": "derived-from-ios",
+            "note": "Android listing inferred from the verified iOS App Store entry; not independently confirmed via Play Store.",
+        })
 
     return sorted(results + android_results, key=lambda x: x["status"] != "Official")
 
@@ -169,7 +173,7 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
         "packageSize": store_meta["size"],
         "timestamp": datetime.utcnow().isoformat(),
         "findings": [],
-        "pqc_score": 0,
+        "pqc_score": None,  # None means "not assessed" until a probe succeeds or fails cleanly
     }
 
     # 2. Probe the app's API domain for TLS posture
@@ -209,15 +213,19 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
                     "recommendation": "Upgrade API gateway to TLS 1.3.",
                 })
     else:
+        # The app's backend could not be reached. Report that and nothing else — no
+        # cryptographic claim (algorithm, severity, or score) is made about a host we
+        # never reached. This mirrors the same fix applied to the web pillar in
+        # scanner_engine.py: an unreachable target yields no verdict, not a default one.
         domain_str = api_tls.get("domain", "not resolved")
         results["findings"].append({
-            "severity": "high",
-            "issue": "App Backend API Unreachable",
-            "detail": f"Could not probe the app's API backend ({domain_str}). PQC posture could not be verified. Classical RSA/ECC is likely based on standard mobile banking profiles.",
-            "recommendation": "Integrate liboqs or Bouncy Castle PQC providers into the mobile build pipeline.",
+            "severity": "info",
+            "issue": "App Backend API Unreachable — Not Assessed",
+            "detail": f"Could not probe the app's API backend ({domain_str}). No cryptographic findings are reported for this app because none were observed.",
+            "recommendation": "Verify the API domain resolves and is reachable, then re-run the scan. Provide the correct backend hostname if the automatic guess is wrong.",
         })
-        results["pqc_score"] = 100
-        results["quantumSafe"] = False
+        results["pqc_score"] = None
+        results["quantumSafe"] = None
 
     # 3. Store metadata finding
     if store_meta["version"] != "Unknown":

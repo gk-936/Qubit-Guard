@@ -40,7 +40,7 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
         components.append({
             "type": cfg["type"],
             "name": cfg["name"],
-            "version": "1.0",
+            "version": "unknown",
             "crypto": detected_algo,
             "quantumSafe": is_quantum_safe,
             "properties": [
@@ -69,7 +69,7 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
             components.append({
                 "type": comp_type,
                 "name": f"{main_pillar} ({host})",
-                "version": asset.get("details", {}).get("version", "1.0"),
+                "version": asset.get("details", {}).get("version", "unknown"),
                 "crypto": "ML-DSA (PQC)" if pqc_ready else f"Classical ({tls_v})",
                 "quantumSafe": pqc_ready,
                 "properties": [
@@ -109,19 +109,44 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
     # --- Mobile Application Ingestion ---
     if discovered_mobile_apps:
         for app in discovered_mobile_apps:
-            # Map discovered mobile apps as distinct manageable assets
+            # App discovery (search_mobile_apps) only returns store metadata
+            # (name/id/platform/status) — it carries no cryptographic evidence.
+            # If a real scan_mobile_app() result was attached to this entry
+            # (e.g. via its `findings`), derive crypto/quantumSafe from that
+            # evidence. Otherwise report "unknown" rather than a fabricated default.
+            app_findings = app.get("findings") or []
+            detected_algo = None
+            quantum_safe = None
+            for f in app_findings:
+                issue = f.get("issue", "")
+                if "PQC-Ready" in issue:
+                    detected_algo = issue.split(":")[-1].strip()
+                    quantum_safe = True
+                    break
+                if "Classical Crypto" in issue:
+                    detected_algo = issue.split(":")[-1].strip()
+                    quantum_safe = False
+                    break
+            if detected_algo is None:
+                detected_algo = "unknown"
+                quantum_safe = app.get("quantumSafe")  # None if the app was never scanned
+
+            properties = [
+                {"name": "quantum-shield:asset-type", "value": f"Mobile/{app['platform']}"},
+                {"name": "quantum-shield:package-id", "value": app["id"]},
+                {"name": "quantum-shield:status", "value": app["status"]},
+                {"name": "quantum-shield:quantum-safe", "value": str(quantum_safe).lower() if quantum_safe is not None else "unknown"},
+            ]
+            if app.get("source") == "derived-from-ios":
+                properties.append({"name": "quantum-shield:source", "value": "derived-from-ios (not independently verified)"})
+
             components.append({
                 "type": "application",
                 "name": f"Mobile App: {app['name']} ({app['platform']})",
-                "version": "v1.0",
-                "crypto": "Classical (RSA/ECC)", # Mobile apps in prototype default to classical for audit contrast
-                "quantumSafe": False,
-                "properties": [
-                    {"name": "quantum-shield:asset-type", "value": f"Mobile/{app['platform']}"},
-                    {"name": "quantum-shield:package-id", "value": app["id"]},
-                    {"name": "quantum-shield:status", "value": app["status"]},
-                    {"name": "quantum-shield:quantum-safe", "value": "false"},
-                ]
+                "version": app.get("version", "unknown"),
+                "crypto": detected_algo,
+                "quantumSafe": quantum_safe,
+                "properties": properties
             })
 
     cbom = {
