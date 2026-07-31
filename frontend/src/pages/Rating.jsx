@@ -3,9 +3,14 @@ import { useScan } from '../context/ScanContext';
 
 const Rating = () => {
   const { activeData } = useScan();
-  const qvs = activeData?.riskScores?.overall || 0;
-  const ratingScore = activeData ? Math.max(0, 1000 - (qvs * 8)) : 0;
-  const ratingLabel = !activeData ? '⭕ No Audit Data' : ratingScore > 700 ? '✓ Elite-PQC Status' : ratingScore > 400 ? '🔰 Standard Status' : '⭕ Legacy Status';
+  const qvs = activeData?.riskScores?.overall;
+  // A null QVS means no pillar could be assessed. It must not fall through to 0,
+  // which would render as a perfect 1000/1000 "Elite-PQC" rating.
+  const hasScore = activeData && qvs !== null && qvs !== undefined;
+  const ratingScore = hasScore ? Math.max(0, 1000 - (qvs * 8)) : null;
+  const ratingLabel = !activeData ? '⭕ No Audit Data'
+    : !hasScore ? '⚠ Not Assessed — no pillar could be probed'
+    : ratingScore > 700 ? '✓ Elite-PQC Status' : ratingScore > 400 ? '🔰 Standard Status' : '⭕ Legacy Status';
 
   return (
     <div id="page-rating" className="page-view">
@@ -13,8 +18,8 @@ const Rating = () => {
         <div>
           <div className="score-display">
             <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'rgba(255,255,255,.5)', letterSpacing: '3px', marginBottom: '8px' }}>CONSOLIDATED ENTERPRISE CYBER-RATING</div>
-            <div className="score-num">{ratingScore}<span style={{ fontSize: '30px' }}>/1000</span></div>
-            <div className="score-label" style={{ color: ratingScore > 700 ? '#1A8A1A' : ratingScore > 400 ? '#D47800' : '#C0272D' }}>{ratingLabel}</div>
+            <div className="score-num">{hasScore ? ratingScore : '—'}<span style={{ fontSize: '30px' }}>/1000</span></div>
+            <div className="score-label" style={{ color: !hasScore ? 'rgba(255,255,255,.5)' : ratingScore > 700 ? '#1A8A1A' : ratingScore > 400 ? '#D47800' : '#C0272D' }}>{ratingLabel}</div>
           </div>
           <div className="card">
             <div className="card-title">Rating Scale</div>

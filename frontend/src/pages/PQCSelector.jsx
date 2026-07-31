@@ -361,8 +361,8 @@ const PQCSelector = () => {
                     <span>Model: {result.model_info.type}</span>
                     <span>Trees: {result.model_info.n_trees}</span>
                     <span>Depth: {result.model_info.max_depth}</span>
-                    <span>Training: {result.model_info.training_samples} samples</span>
-                    <span>Data: {result.model_info.sovereign_data ? '🇮🇳 Sovereign' : 'Mixed'}</span>
+                    <span>Rules: {result.model_info.training_samples} rows</span>
+                    <span>Source: {result.model_info.training_source}</span>
                   </div>
                 )}
               </div>

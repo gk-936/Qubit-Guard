@@ -24,19 +24,11 @@ const Reporting = () => {
     try {
       const selectedFormats = Object.keys(formats).filter(k => formats[k]);
       const response = await sendEmailReport({ email, reportType, formats: selectedFormats });
-      if (response.data.success) {
-        if (response.data.simulated) {
-          const backendMsg = response.data.message || '';
-          if (backendMsg.includes('Demo Mode')) {
-            showToast(`[DEMO] Report logged to console. SMTP auth blocked.`, 'info');
-          } else {
-            showToast(`[SIMULATION] Report generated and logged.`, 'info');
-          }
-        } else {
-          showToast(`Success! ${reportType.toUpperCase()} report dispatched to ${email}.`, 'success');
-        }
+      if (response.data.delivered) {
+        showToast(`Success! ${reportType.toUpperCase()} report dispatched to ${email}.`, 'success');
       } else {
-        showToast(response.data.message || 'Failed to send report. Check SMTP config.', 'error');
+        // Report was generated but not delivered — never claim it was sent.
+        showToast(response.data.message || 'Report generated but NOT sent. Check SMTP config.', 'error');
       }
     } catch (err) {
       console.error(err);

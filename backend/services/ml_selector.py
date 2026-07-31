@@ -10,9 +10,9 @@ for a given scan environment based on:
   - Data Retention (years)
   - Compliance Mandate (CERT-In, RBI, NIST)
 
-Training Data: Sovereign Indian datasets modeled on AIKosh network profiles,
-DST National PQC Testing & Certification Program (2026) benchmarks, and
-I4C Cybercrime behavioral patterns.
+Decision Data: a hand-authored rule table encoding NIST PQC selection guidance
+(FIPS 203 / 204 / 205 parameter sets) against deployment constraints. It is not
+collected or observed data, and no external dataset is loaded at runtime.
 
 Output: Algorithm selection with Selector_Log.
 """
@@ -20,11 +20,11 @@ Output: Algorithm selection with Selector_Log.
 from datetime import datetime
 
 
-# ── Sovereign Indian Training Dataset ─────────────────────────────────────────
-# Modeled from:
-#   - AIKosh (IndiaAI Datasets Platform) — Indian ISP bandwidth/latency profiles
-#   - DST National PQC Testing Program 2026 — algorithm performance benchmarks
-#   - I4C Cybercrime behavioral logs — attack surface frequency distributions
+# ── Decision Table ────────────────────────────────────────────────────────────
+# Hand-authored rows mapping deployment constraints to a PQC algorithm choice.
+# Each row encodes published algorithm characteristics (key/signature sizes and
+# security levels from FIPS 203/204/205) rather than any measured or collected
+# dataset. Treat this as an expert-authored rule set, not training data.
 #
 # Features: [pillar_idx, bandwidth_kbps, latency_ms, device_idx,
 #             retention_years, compliance_idx]
@@ -464,8 +464,8 @@ def select_algorithm(
             "n_trees": _model.n_trees,
             "max_depth": _model.max_depth,
             "training_samples": len(TRAINING_DATA),
-            "training_source": "AIKosh (IndiaAI) + DST PQC 2026 + I4C Behavioral Logs",
-            "sovereign_data": True,
+            "training_source": "Hand-authored rule table derived from NIST FIPS 203/204/205 parameter sets",
+            "external_dataset": False,
         },
         "timestamp": datetime.utcnow().isoformat(),
     }

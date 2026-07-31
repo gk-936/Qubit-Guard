@@ -2,7 +2,6 @@
 Data router — dashboard, inventory, cbom queries from SQLite.
 """
 
-import os
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -28,6 +27,16 @@ class InventoryItemRequest(BaseModel):
     purl: str = ""
 
 router = APIRouter()
+
+
+def _cyber_rating(overall) -> dict:
+    """Build the Cyber Rating card. A null QVS means no pillar was assessed —
+    it must not be graded as a tier, since that would read as a real result."""
+    if overall is None:
+        return {"value": "Not Assessed", "label": "Cyber Rating",
+                "subtext": "No pillar could be probed"}
+    tier = "Tier 1" if overall < 20 else "Tier 2" if overall < 50 else "Tier 4"
+    return {"value": tier, "label": "Cyber Rating", "subtext": f"QVS: {overall}"}
 
 
 @router.get("/dashboard")
@@ -57,7 +66,7 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
             
             summary = {
                 "assetsDiscovery": {"value": str(comp_count), "label": "Assets Discovered", "subtext": f"Target: {scan.web_url}"},
-                "cyberRating": {"value": "Tier 1" if risk_scores["overall"] < 20 else "Tier 2" if risk_scores["overall"] < 50 else "Tier 4", "label": "Cyber Rating", "subtext": f"QVS: {risk_scores['overall']}"},
+                "cyberRating": _cyber_rating(risk_scores.get("overall")),
                 "sslCerts": {"value": str(len(findings.get("web", []))), "label": "SSL Certs Engine", "subtext": "Web Target Findings"},
                 "cbomVulnerabilities": {"value": str(critical_count + high_count), "label": "Severe Vulnerabilities", "subtext": "Critical and High"},
             }
@@ -113,12 +122,13 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
     soft_cnt = db.query(CbomItem).filter(CbomItem.category == "Software").count()
     api_cnt = db.query(CbomItem).filter(CbomItem.category == "API").count()
     vpn_cnt = db.query(CbomItem).filter(CbomItem.category == "VPN").count()
+    iot_cnt = db.query(CbomItem).filter(CbomItem.category == "IoT").count()
     
     inventory = {
-        "ssl": ssl_cnt or 8761, # Fallback to seed if empty for demo feel
-        "software": cbom_count,
-        "iot": 3854,
-        "logins": api_cnt or 1198
+        "ssl": ssl_cnt,
+        "software": soft_cnt,
+        "iot": iot_cnt,
+        "logins": api_cnt
     }
 
     posture_rows = db.query(PostureStat).all()
@@ -399,37 +409,39 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         "iot_findings": iot_findings,
     }
     
-    # Check if SMTP is configured
-    smtp_user = os.getenv("SMTP_USER", "")
-    smtp_pass = os.getenv("SMTP_PASS", "")
-    is_simulated = not (smtp_user and smtp_pass)
-    
     try:
         # 10-second hard timeout so the button never hangs forever
-        success, error_detail = await asyncio.wait_for(
+        success, detail = await asyncio.wait_for(
             send_scan_report_async(req.email, scan_data),
             timeout=10.0
         )
     except asyncio.TimeoutError:
-        # Network is blocked or SMTP unreachable — graceful demo fallback
-        print(f"[MAIL] Timed out after 10s. Falling back to demo mode.")
-        return {
-            "success": True,
-            "message": f"Report generated for {req.email} (Demo Mode — SMTP timed out)",
-            "simulated": True
-        }
-    
-    # If it's a Demo Mode fallback, treat as simulation
-    is_demo_fallback = "Demo Mode" in str(error_detail)
-    
+        print(f"[MAIL] Timed out after 10s. NO EMAIL SENT.")
+        success, detail = False, "SMTP_TIMEOUT"
+
     if success:
         return {
-            "success": True, 
-            "message": f"Professional PQC audit report generated and sent to {req.email}",
-            "simulated": is_simulated or is_demo_fallback,
-            "reportType": req.reportType
+            "success": True,
+            "delivered": True,
+            "message": f"PQC audit report generated and sent to {req.email}",
+            "reportType": req.reportType,
         }
-    return {"success": False, "message": f"SMTP Error: {error_detail}"}
+
+    # The report was generated; delivery did not happen. Say so plainly — never
+    # report a send that did not occur.
+    reasons = {
+        "NOT_CONFIGURED": "SMTP credentials are not configured on the server (SMTP_USER / SMTP_PASS).",
+        "SMTP_BLOCKED":   "the SMTP ports (587/465) are blocked on this network.",
+        "SMTP_TIMEOUT":   "the SMTP server did not respond within 10 seconds.",
+    }
+    reason = reasons.get(str(detail), f"SMTP error: {detail}")
+    return {
+        "success": False,
+        "delivered": False,
+        "message": f"Report generated but NOT sent to {req.email} — {reason} Use Download PDF to retrieve it.",
+        "reason_code": str(detail),
+        "reportType": req.reportType,
+    }
 
 
 @router.post("/inventory/add")

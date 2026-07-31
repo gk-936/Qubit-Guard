@@ -17,7 +17,7 @@ const TriadScanner = () => {
   const [jwtToken, setJwtToken] = useState('eyJhbGciOiJSUzI1NiIs...');
   
   const [findings, setFindings] = useState(activeData?.findings || { web: [], vpn: [], api: [], firmware: [], archival: [] });
-  const [riskScores, setRiskScores] = useState(activeData?.riskScores || { web: 0, vpn: 0, api: 0, firmware: 0, archival: 0, overall: 0 });
+  const [riskScores, setRiskScores] = useState(activeData?.riskScores || { web: null, vpn: null, api: null, firmware: null, archival: null, overall: null });
   const [selectorLog, setSelectorLog] = useState(activeData?.selectorLog || null);
   const [apiMetrics, setApiMetrics] = useState(activeData?.apiMetrics || null);
   const [cbom, setCbom] = useState(activeData?.cbom || null);
@@ -97,7 +97,7 @@ const TriadScanner = () => {
         const scanId = result.id;
         
         setFindings(result.findings);
-        setRiskScores(result.riskScores || { web: 0, vpn: 0, api: 0, firmware: 0, archival: 0, overall: 0 });
+        setRiskScores(result.riskScores || { web: null, vpn: null, api: null, firmware: null, archival: null, overall: null });
         setApiMetrics(result.apiMetrics);
         setCbom(result.cbom);
         setRemediation(result.remediation || []);
@@ -125,7 +125,13 @@ const TriadScanner = () => {
     archival: { tag: 'ARCHIVAL PILLAR', title: 'Archival Encryption Engine', subtitle: 'BIKE/HQC KEM Analysis', class: 'pillar-e', icon: '🗄️' },
   };
 
+  // A null score means the pillar could not be probed — it is "not assessed",
+  // which must never be rendered as 0 ("no risk").
+  const isScored = (score) => score !== null && score !== undefined;
+  const qvsText = (score) => (isScored(score) ? score : 'N/A');
+
   const qvsColor = (score) => {
+    if (!isScored(score)) return 'var(--text-dim)';
     if (score >= 80) return '#C0272D';
     if (score >= 50) return '#D47800';
     if (score >= 20) return '#1A6BAA';
@@ -133,6 +139,7 @@ const TriadScanner = () => {
   };
 
   const qvsLabel = (score) => {
+    if (!isScored(score)) return 'NOT ASSESSED';
     if (score >= 80) return 'CRITICAL';
     if (score >= 50) return 'HIGH';
     if (score >= 20) return 'MODERATE';
@@ -206,7 +213,7 @@ const TriadScanner = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontFamily: 'var(--disp)', fontSize: '64px', fontWeight: 700, color: qvsColor(riskScores.overall), lineHeight: 1, textShadow: `0 0 30px ${qvsColor(riskScores.overall)}33` }}>
-                    {riskScores.overall}
+                    {qvsText(riskScores.overall)}
                   </div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text-dim)', letterSpacing: '2px' }}>QVS / 100</div>
                   <div style={{ marginTop: '8px', padding: '4px 16px', border: `1px solid ${qvsColor(riskScores.overall)}80`, color: qvsColor(riskScores.overall), fontFamily: 'var(--mono)', fontSize: '11px', display: 'inline-block', borderRadius: '4px' }}>
@@ -218,10 +225,10 @@ const TriadScanner = () => {
                     <div key={p} style={{ marginBottom: '8px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
                         <span>{p === 'web' ? 'WEB / TLS' : p === 'vpn' ? 'VPN / TLS' : p === 'api' ? 'API / JWT' : p === 'firmware' ? 'FIRMWARE' : 'ARCHIVAL'}</span>
-                        <span style={{ color: qvsColor(riskScores[p] || 0), fontWeight: 700 }}>{riskScores[p] || 0}</span>
+                        <span style={{ color: qvsColor(riskScores[p]), fontWeight: 700 }}>{qvsText(riskScores[p])}</span>
                       </div>
                       <div className="prog-bar">
-                        <div className="prog-fill pf-red" style={{ width: `${riskScores[p]}%`, background: `linear-gradient(90deg, ${qvsColor(riskScores[p])}, ${qvsColor(riskScores[p])}AA)` }}></div>
+                        <div className="prog-fill pf-red" style={{ width: `${isScored(riskScores[p]) ? riskScores[p] : 0}%`, background: `linear-gradient(90deg, ${qvsColor(riskScores[p])}, ${qvsColor(riskScores[p])}AA)` }}></div>
                       </div>
                     </div>
                   ))}
@@ -240,7 +247,7 @@ const TriadScanner = () => {
                   <div className="pc-tag">{meta.icon} {meta.tag}</div>
                   <div className="pc-title">{meta.title}</div>
                   <div style={{ fontSize: '10px', opacity: 0.7, marginBottom: '10px', fontFamily: 'var(--mono)' }}>{meta.subtitle}</div>
-                  <div style={{ fontSize: '10px', opacity: 0.8, marginBottom: '6px', fontFamily: 'var(--mono)', letterSpacing: '1px' }}>QVS: {riskScores[pillar]}/100</div>
+                  <div style={{ fontSize: '10px', opacity: 0.8, marginBottom: '6px', fontFamily: 'var(--mono)', letterSpacing: '1px' }}>QVS: {qvsText(riskScores[pillar])}{isScored(riskScores[pillar]) ? '/100' : ''}</div>
                   <div className="pc-findings">
                     {findings[pillar].map((f, i) => (
                       <div key={i} className="pc-finding">

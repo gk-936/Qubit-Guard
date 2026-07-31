@@ -29,16 +29,16 @@ def seed():
     # ---------- Dashboard Summary ----------
     if not db.query(DashboardSummary).first():
         for key, val, lbl, sub in [
-            ("assetsDiscovery", "212,450", "Assets Discovery", "Domains, IPs & Subdomains"),
-            ("cyberRating", "755/1000", "Cyber Rating", "Elite-PQC Status"),
-            ("sslCerts", "93", "Active SSL Certs", "22 weak cryptography"),
-            ("cbomVulnerabilities", "8248", "CBOM Vulnerabilities", "Requiring immediate action"),
+            ("assetsDiscovery", "0", "Assets Discovery", "Domains, IPs & Subdomains"),
+            ("cyberRating", "N/A", "Cyber Rating", "Elite-PQC Status"),
+            ("sslCerts", "0", "Active SSL Certs", "Weak cryptography findings"),
+            ("cbomVulnerabilities", "0", "CBOM Vulnerabilities", "Requiring immediate action"),
         ]:
             db.add(DashboardSummary(key=key, value=val, label=lbl, subtext=sub))
 
     # ---------- Inventory Stats ----------
     if not db.query(InventoryStat).first():
-        for cat, cnt in [("ssl", 8761), ("software", 13211), ("iot", 3854), ("logins", 1198)]:
+        for cat, cnt in [("ssl", 0), ("software", 0), ("iot", 0), ("logins", 0)]:
             db.add(InventoryStat(category=cat, count=cnt))
 
     # ---------- Posture Stats ----------

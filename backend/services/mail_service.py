@@ -880,11 +880,13 @@ def _send_smtp_blocking(email: str, scan_data: dict) -> tuple:
     summary = scan_data.get("riskScores", {}).get("overall", "N/A")
 
     if not smtp_user or not smtp_pass:
-        print(f"[MAIL] SMTP credentials missing. Logging report to console instead.")
+        print(f"[MAIL] SMTP credentials missing. Logging report to console instead. NO EMAIL SENT.")
         print(f"[MAIL-SIM] To: {email}")
         print(f"[MAIL-SIM] Subject: PQC Scan Report")
         print(f"[MAIL-SIM] Overall QVS: {summary}")
-        return True, "Simulated"
+        # The report was generated but not delivered. The caller must not present
+        # this as a successful send.
+        return False, "NOT_CONFIGURED"
 
     msg = _build_email_message(smtp_user, email, scan_data)
 
@@ -912,12 +914,13 @@ def _send_smtp_blocking(email: str, scan_data: dict) -> tuple:
             return True, "Success"
         except Exception as e2:
             error_msg = f"TLS Failed ({e1}) | SSL Failed ({e2})"
-            print(f"[MAIL] Both protocols failed: {error_msg}")
-            
-            # HACKATHON FAILSAFE: Network refusal / timeout fallback
+            print(f"[MAIL] Both protocols failed: {error_msg}. NO EMAIL SENT.")
+
+            # Network-level block (corporate firewall closing 587/465). The report was
+            # still generated, but nothing was delivered — report it as such.
             if any(kw in error_msg.lower() for kw in ["10061", "refused", "timed out", "timeout", "unreachable"]):
-                return True, "Demo Mode (Network Blocked)"
-            
+                return False, "SMTP_BLOCKED"
+
             return False, error_msg
 
 
