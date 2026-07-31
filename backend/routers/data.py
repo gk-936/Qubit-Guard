@@ -229,14 +229,30 @@ def get_inventory(request: Request, db: Session = Depends(get_db)):
     }
 
 
-@router.delete("/inventory/{purl}")
+@router.delete("/inventory/{purl:path}")
 def delete_asset(purl: str, db: Session = Depends(get_db)):
+    from urllib.parse import unquote
+
+    # The frontend may send the purl percent-encoded (slashes/@ survive transit)
+    # or raw. Try the raw value first, then fall back to the decoded form so
+    # either works.
     item = db.query(CbomItem).filter(CbomItem.purl == purl).first()
+    decoded_purl = purl
+    if item is None:
+        decoded_purl = unquote(purl)
+        if decoded_purl != purl:
+            item = db.query(CbomItem).filter(CbomItem.purl == decoded_purl).first()
+
     if item:
+        deleted_purl = item.purl
         db.delete(item)
         db.commit()
-        return {"success": True, "message": f"Asset {purl} removed successfully."}
-    return JSONResponse(status_code=404, content={"success": False, "message": "Asset not found."})
+        return {"success": True, "message": f"Asset {deleted_purl} removed successfully."}
+
+    return JSONResponse(
+        status_code=404,
+        content={"success": False, "message": f"Asset not found: {decoded_purl}"},
+    )
 
 
 @router.get("/cbom")

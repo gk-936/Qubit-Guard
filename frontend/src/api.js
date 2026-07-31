@@ -57,7 +57,7 @@ export const scanMobileApp = (data) => api.post('/mobile/scan', data);
 
 export const getDashboardData = () => api.get('/data/dashboard');
 export const getInventoryData = () => api.get('/data/inventory');
-export const deleteInventoryItem = (purl) => api.delete(`/data/inventory/${purl}`);
+export const deleteInventoryItem = (purl) => api.delete(`/data/inventory/${encodeURIComponent(purl)}`);
 export const getCbomData = () => api.get('/data/cbom');
 
 export const login = (credentials) => api.post('/auth/login', credentials);

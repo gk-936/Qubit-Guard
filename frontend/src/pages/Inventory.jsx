@@ -54,6 +54,7 @@ const Inventory = () => {
         fetchData();
       }
     } catch (err) {
+      console.error('Failed to delete inventory item:', purl, err);
       showToast('Extraction failed. Persistent record locked.', 'error');
     }
   };
@@ -182,6 +183,7 @@ const Inventory = () => {
                   <td><span className={`risk-badge ${d.risk === 'Low' ? 'rb-low' : (d.risk === 'Critical' ? 'rb-critical' : 'rb-high')}`}>{d.risk}</span></td>
                    <td style={{ display: 'flex', gap: '5px' }}>
                     <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleView(d)}>View</button>
+                    <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleDelete(d.purl)}>Delete</button>
                   </td>
                 </tr>
               ))}
