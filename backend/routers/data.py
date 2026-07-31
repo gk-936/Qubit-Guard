@@ -29,6 +29,25 @@ class InventoryItemRequest(BaseModel):
 router = APIRouter()
 
 
+def _provenance(db: Session, *models) -> dict:
+    """Build the dataProvenance block for a response by counting real rows
+    across whichever provenance-tracked tables that endpoint actually reads.
+    'seedRows' is rows with source == 'seed' (shipped demo data); 'scanRows'
+    is everything else (scan-derived or manually entered — i.e. not fabricated
+    demo data). isDemoData is True the instant any seed row is in the mix."""
+    seed_rows = 0
+    total_rows = 0
+    for model in models:
+        seed_rows += db.query(model).filter(model.source == "seed").count()
+        total_rows += db.query(model).count()
+    scan_rows = total_rows - seed_rows
+    return {
+        "isDemoData": seed_rows > 0,
+        "seedRows": seed_rows,
+        "scanRows": scan_rows,
+    }
+
+
 def _cyber_rating(overall) -> dict:
     """Build the Cyber Rating card. A null QVS means no pillar was assessed —
     it must not be graded as a tier, since that would read as a real result."""
@@ -99,6 +118,9 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
                     "posture": posture,
                     "cbomSummary": cbom_summary,
                 },
+                # Everything above came from the live ScanResult JSON, not the
+                # seeded demo tables — never demo data.
+                "dataProvenance": {"isDemoData": False, "seedRows": 0, "scanRows": comp_count},
             }
 
     # --- DYNAMIC DASHBOARD (No active scan) ---
@@ -150,6 +172,7 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
             "posture": posture,
             "cbomSummary": cbom_summary,
         },
+        "dataProvenance": _provenance(db, DashboardSummary, CbomItem, PostureStat),
     }
 
 
@@ -172,11 +195,16 @@ def get_inventory(request: Request, db: Session = Depends(get_db)):
                     "purl": f"pkg:triad/{c['name']}@{c.get('version', '0.0.0')}",
                     "details": c.get("details", {}),
                     "server_banner": c.get("details", {}).get("server_banner", "Unknown"),
-                    "security_audit": c.get("details", {}).get("security_audit", {})
+                    "security_audit": c.get("details", {}).get("security_audit", {}),
+                    "source": "scan",
                 }
                 for c in cbom.get("components", [])
             ]
-            return {"success": True, "data": data}
+            return {
+                "success": True,
+                "data": data,
+                "dataProvenance": {"isDemoData": False, "seedRows": 0, "scanRows": len(data)},
+            }
 
     items = db.query(CbomItem).all()
     data = [
@@ -189,11 +217,16 @@ def get_inventory(request: Request, db: Session = Depends(get_db)):
             "category": i.category,
             "purl": i.purl,
             "server_banner": getattr(i, 'server_banner', 'N/A'),
-            "security_audit": getattr(i, 'security_audit', {})
+            "security_audit": getattr(i, 'security_audit', {}),
+            "source": i.source,
         }
         for i in items
     ]
-    return {"success": True, "data": data}
+    return {
+        "success": True,
+        "data": data,
+        "dataProvenance": _provenance(db, CbomItem),
+    }
 
 
 @router.delete("/inventory/{purl}")
@@ -223,10 +256,15 @@ def get_cbom(request: Request, db: Session = Depends(get_db)):
                     "risk": "Critical" if not c.get("quantumSafe") else "Safe",
                     "category": c.get("type", "TLS"),
                     "purl": f"pkg:triad/{c['name']}@{c.get('version', '0.0.0')}",
+                    "source": "scan",
                 }
                 for c in cbom.get("components", [])
             ]
-            return {"success": True, "data": {"cbomItems": cbom_items}}
+            return {
+                "success": True,
+                "data": {"cbomItems": cbom_items},
+                "dataProvenance": {"isDemoData": False, "seedRows": 0, "scanRows": len(cbom_items)},
+            }
 
     items = db.query(CbomItem).all()
     cbom_items = [
@@ -238,10 +276,15 @@ def get_cbom(request: Request, db: Session = Depends(get_db)):
             "risk": i.risk,
             "category": i.category,
             "purl": i.purl,
+            "source": i.source,
         }
         for i in items
     ]
-    return {"success": True, "data": {"cbomItems": cbom_items}}
+    return {
+        "success": True,
+        "data": {"cbomItems": cbom_items},
+        "dataProvenance": _provenance(db, CbomItem),
+    }
 
 
 @router.get("/cbom/export/{fmt}")
@@ -454,7 +497,8 @@ def add_inventory_item(body: InventoryItemRequest, db: Session = Depends(get_db)
         category=body.category,
         quantum_safe=body.quantum_safe,
         risk=body.risk,
-        purl=body.purl or f"pkg:triad/{body.component}@{body.version or '0.0.0'}"
+        purl=body.purl or f"pkg:triad/{body.component}@{body.version or '0.0.0'}",
+        source="manual"
     )
     db.add(new_item)
     db.commit()

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from db import engine, Base
+from db import engine, Base, ensure_schema
 from seed_data import seed
 from security import require_auth
 from routers import auth, scan, data, remediation, mobile, discovery, scheduler, pqc_selector
@@ -22,8 +22,9 @@ PROTECTED = [Depends(require_auth)]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables & seed
+    # Startup: create tables, migrate existing DBs, & seed
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     seed()
 
     # Start the background reporting worker

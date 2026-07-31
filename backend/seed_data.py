@@ -34,23 +34,23 @@ def seed():
             ("sslCerts", "0", "Active SSL Certs", "Weak cryptography findings"),
             ("cbomVulnerabilities", "0", "CBOM Vulnerabilities", "Requiring immediate action"),
         ]:
-            db.add(DashboardSummary(key=key, value=val, label=lbl, subtext=sub))
+            db.add(DashboardSummary(key=key, value=val, label=lbl, subtext=sub, source="seed"))
 
     # ---------- Inventory Stats ----------
     if not db.query(InventoryStat).first():
         for cat, cnt in [("ssl", 0), ("software", 0), ("iot", 0), ("logins", 0)]:
-            db.add(InventoryStat(category=cat, count=cnt))
+            db.add(InventoryStat(category=cat, count=cnt, source="seed"))
 
     # ---------- Posture Stats ----------
     if not db.query(PostureStat).first():
         for metric, val in [("mlKemAdoption", 33), ("mlDsaTransition", 22), ("legacyRemoval", 8),
                             ("slhDsaBackup", 5), ("fnDsaMobile", 3), ("xmssLmsFirmware", 2), ("bikeHqcArchival", 1)]:
-            db.add(PostureStat(metric=metric, value=val))
+            db.add(PostureStat(metric=metric, value=val, source="seed"))
 
     # ---------- CBOM Vulnerability Summary ----------
     if not db.query(CbomVulnerabilitySummary).first():
         for sev, cnt in [("critical", 2847), ("high", 3120), ("medium", 1881), ("low", 400)]:
-            db.add(CbomVulnerabilitySummary(severity=sev, count=cnt))
+            db.add(CbomVulnerabilitySummary(severity=sev, count=cnt, source="seed"))
 
     # ---------- CBOM Items ----------
     if not db.query(CbomItem).first():
@@ -72,7 +72,8 @@ def seed():
         for comp, ver, alg, qs, risk, cat, purl in items:
             db.add(CbomItem(
                 component=comp, version=ver, algorithm=alg,
-                quantum_safe=qs, risk=risk, category=cat, purl=purl
+                quantum_safe=qs, risk=risk, category=cat, purl=purl,
+                source="seed"
             ))
 
     db.commit()

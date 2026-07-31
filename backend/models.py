@@ -25,6 +25,10 @@ class DashboardSummary(Base):
     value = Column(String(255), nullable=False)
     label = Column(String(255), default="")
     subtext = Column(String(255), default="")
+    # Provenance of this row: "seed" (shipped demo data), "scan" (derived from
+    # a real scan), or "manual" (user-entered). Lets consumers tell fabricated
+    # demo numbers apart from measured results.
+    source = Column(String(20), default="scan", nullable=False, index=True)
 
 
 class InventoryStat(Base):
@@ -33,6 +37,7 @@ class InventoryStat(Base):
     id = Column(Integer, primary_key=True, index=True)
     category = Column(String(100), unique=True, nullable=False)  # ssl, software, iot, logins
     count = Column(Integer, default=0)
+    source = Column(String(20), default="scan", nullable=False, index=True)
 
 
 class PostureStat(Base):
@@ -41,6 +46,7 @@ class PostureStat(Base):
     id = Column(Integer, primary_key=True, index=True)
     metric = Column(String(100), unique=True, nullable=False)
     value = Column(Integer, default=0)
+    source = Column(String(20), default="scan", nullable=False, index=True)
 
 
 class CbomVulnerabilitySummary(Base):
@@ -49,6 +55,7 @@ class CbomVulnerabilitySummary(Base):
     id = Column(Integer, primary_key=True, index=True)
     severity = Column(String(50), unique=True, nullable=False)
     count = Column(Integer, default=0)
+    source = Column(String(20), default="scan", nullable=False, index=True)
 
 
 class CbomItem(Base):
@@ -64,6 +71,7 @@ class CbomItem(Base):
     purl = Column(String(500), default="")
     key_size = Column(String(50), default="")
     mode = Column(String(50), default="")
+    source = Column(String(20), default="scan", nullable=False, index=True)
 
 
 class ScanResult(Base):

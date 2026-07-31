@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { getInventoryData, addInventoryItem, deleteInventoryItem } from '../api';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
+import DemoDataBanner from '../components/DemoDataBanner';
 
 const Inventory = () => {
   const { activeScanId } = useScan();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const [inventoryData, setInventoryData] = useState([]);
+  const [provenance, setProvenance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -30,6 +32,7 @@ const Inventory = () => {
       const response = await getInventoryData();
       if (response.data.success) {
         setInventoryData(response.data.data);
+        setProvenance(response.data.dataProvenance || null);
       }
     } catch (err) {
       console.error('Failed to fetch inventory data:', err);
@@ -100,6 +103,7 @@ const Inventory = () => {
 
   return (
     <div id="page-inventory" className="page-view">
+      <DemoDataBanner provenance={provenance} />
       <div className="inv-stats">
         <div className="inv-stat">
           <div className="is-val">{inventoryData.length}</div>
@@ -166,7 +170,12 @@ const Inventory = () => {
                 <tr key={i}>
                   <td><input type="checkbox" /></td>
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#1A5ACC' }}>{d.purl || `ASSET-${i+100}`}</td>
-                  <td style={{ fontWeight: 'bold' }}>{d.component}</td>
+                  <td style={{ fontWeight: 'bold' }}>
+                    {d.component}
+                    {d.source === 'seed' && (
+                      <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--text-dim)', border: '1px solid var(--text-dim)', borderRadius: '4px', padding: '1px 5px' }}>SEED</span>
+                    )}
+                  </td>
                   <td><span style={{ fontSize: '11px', background: '#f0f0f0', padding: '2px 8px', borderRadius: '4px' }}>{d.category || 'Software'}</span></td>
                   <td>{d.version || 'v1.0'}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: d.algorithm?.includes('ML-') ? 'var(--pnb-gold)' : 'var(--pnb-red)' }}>{d.algorithm}</td>

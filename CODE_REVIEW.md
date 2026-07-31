@@ -29,7 +29,9 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 27 | `functionalities.md` / `content.md` overclaim | ✅ Rewritten |
 | 20 | Dead Node/Express codebase | ✅ Deleted |
 | 21 | Other dead code (`entropy.py`, stale JSON) | ✅ Deleted |
-| 6, 8–12, 14, 15, 17–19, 22–25 | — | Open |
+| 18 | Seed data indistinguishable from real data | ✅ Fixed |
+| 17b | `DELETE /inventory/{purl}` always 404s | 🆕 Open (found during #18) |
+| 6, 8–12, 14, 15, 17, 19, 22–25 | — | Open |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
@@ -135,14 +137,29 @@ into a perfect **1000/1000 "Elite-PQC Status"**.
 ### 17. Discovery pillar tagging is filename-based — `discovery_service.py:207-215`
 - `"vpn" in host.lower()` → tagged `SSL-VPN (Inferred)`. No protocol verification. Same for `api`.
 
+### 17b. `DELETE /inventory/{purl}` is unreachable for real purls — `routers/data.py`
+- Found while verifying #18. Package URLs always contain `/` (`pkg:pypi/pyjwt@2.8.0`), but
+  `purl` is a plain path parameter, so the router never matches and every delete returns
+  **404**. Verified: deleting `pkg:test/provenance-check@1` returned 404 and the row survived.
+- The "Delete" control in the Inventory UI therefore cannot work for any seeded or
+  realistically-named component.
+- Fix: declare the parameter as `{purl:path}`, or accept the purl in the request body /
+  as a query parameter.
+
 ---
 
 ## 🟢 P3 — Code hygiene
 
 ### 18. Seeded fake data is indistinguishable from real data — `seed_data.py:46-71`
 - Invented severity counts (`critical=2847, high=3120, medium=1881`), 13 fixed CBOM rows.
-- **No `source`/`is_seed` column** — once a real scan runs, seed and measured rows co-mingle permanently.
-  Only removable one-by-one via `DELETE /inventory/{purl}`.
+- **No `source`/`is_seed` column** — nothing in the API or UI distinguished shipped demo
+  rows from real ones, so the dashboard presented fabricated figures as measurements.
+
+> **Correction to the original finding.** This entry first claimed seed and scan rows
+> "co-mingle once a real scan runs". That is wrong: scans persist to `ScanResult` as JSON
+> and are read live; **no code path writes scan output into these 5 tables**. The only
+> writers are `seed_data.py` and the manual `POST /inventory/add`. The defect was real —
+> demo data was indistinguishable and unlabelled — but it was never corrupted by scans.
 
 ### 19. 11 silently swallowed exceptions
 - Bare `except:` — `mail_service.py:47,147`, `worker.py:137`

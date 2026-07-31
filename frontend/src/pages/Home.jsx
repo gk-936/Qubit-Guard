@@ -4,12 +4,14 @@ import { getDashboardData } from '../api';
 import { useScan } from '../context/ScanContext';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement } from 'chart.js';
 import { Doughnut, Bar, Line } from 'react-chartjs-2';
+import DemoDataBanner from '../components/DemoDataBanner';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement);
 
 const Home = () => {
   const { activeScanId, activeScanMetadata, setPendingScan } = useScan();
   const [data, setData] = useState(null);
+  const [provenance, setProvenance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [targetUrl, setTargetUrl] = useState('');
   const [error, setError] = useState('');
@@ -29,6 +31,7 @@ const Home = () => {
         const response = await getDashboardData();
         if (response.data.success) {
           setData(response.data.data);
+          setProvenance(response.data.dataProvenance || null);
         }
       } catch (err) {
         console.error('Failed to fetch dashboard data:', err);
@@ -68,7 +71,8 @@ const Home = () => {
   // --- LANDING PAGE: NO ACTIVE AUDIT ---
   if (!activeScanId) {
     return (
-      <div id="page-home" className="page-view" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
+      <div id="page-home" className="page-view" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
+        <div style={{ maxWidth: '700px', width: '100%' }}><DemoDataBanner provenance={provenance} /></div>
         <div className="card" style={{ maxWidth: '700px', width: '100%', textAlign: 'center', padding: '60px 40px', background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(10px)', border: '2px solid rgba(212,160,23,0.1)' }}>
           <div style={{ marginBottom: '30px' }}>
             <svg viewBox="0 0 80 90" fill="none" style={{ width: '80px', margin: '0 auto' }}>
@@ -162,6 +166,7 @@ const Home = () => {
 
   return (
     <div id="page-home" className="page-view">
+      <DemoDataBanner provenance={provenance} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', color: '#fff' }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>Audit Dashboard Overview</h2>

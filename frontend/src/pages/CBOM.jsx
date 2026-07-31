@@ -3,12 +3,14 @@ import { getCbomData, exportCbom, saveBlob } from '../api';
 import { useScan } from '../context/ScanContext';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js';
 import { Doughnut, Bar } from 'react-chartjs-2';
+import DemoDataBanner from '../components/DemoDataBanner';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 const CBOM = () => {
   const { activeScanId } = useScan();
   const [items, setItems] = useState([]);
+  const [provenance, setProvenance] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
@@ -17,6 +19,7 @@ const CBOM = () => {
       const response = await getCbomData();
       if (response.data.success) {
         setItems(response.data.data.cbomItems);
+        setProvenance(response.data.dataProvenance || null);
       }
     } catch (err) {
       console.error('Failed to fetch CBOM data:', err);
@@ -51,6 +54,7 @@ const CBOM = () => {
 
   return (
     <div id="page-cbom" className="page-view" style={{ background: '#F8FAFC' }}>
+      <DemoDataBanner provenance={provenance} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h2 style={{ margin: 0, fontSize: '24px', fontWeight: 800, color: '#111' }}>Cryptographic Bill of Materials (CBOM)</h2>
         <div style={{ padding: '8px 16px', background: '#1A8A1A22', color: '#1A8A1A', borderRadius: '30px', fontWeight: 700, fontSize: '13px' }}>
@@ -119,7 +123,12 @@ const CBOM = () => {
             <tbody>
               {items.map((item, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 700, color: '#111' }}>{item.component}</td>
+                  <td style={{ fontWeight: 700, color: '#111' }}>
+                    {item.component}
+                    {item.source === 'seed' && (
+                      <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--text-dim)', border: '1px solid var(--text-dim)', borderRadius: '4px', padding: '1px 5px' }}>SEED</span>
+                    )}
+                  </td>
                   <td><span style={{ fontSize: '10px', background: '#eee', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase' }}>{item.category}</span></td>
                   <td>{item.version}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600 }}>{item.algorithm}</td>
