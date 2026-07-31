@@ -5,9 +5,13 @@ Real HTTP probing with concurrent requests.
 
 import ssl
 import socket
+import logging
 import urllib.request
+import urllib.error
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+log = logging.getLogger(__name__)
 
 
 # Bucket classification by path pattern
@@ -73,8 +77,8 @@ def _probe_single(host: str, path: str, is_api_sub: bool) -> dict:
                 "bucket": _classify_endpoint(path),
                 "status": "Protected" if e.code in [401, 403] else "Available",
             }
-    except Exception:
-        pass
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log.debug("Probe failed for %s: %s", url, e)
 
     return None
 

@@ -5,6 +5,7 @@ Professional PDF Report Generation with Database Integration.
 """
 
 import os
+import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -15,6 +16,9 @@ import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+
+log = logging.getLogger(__name__)
 
 _smtp_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="smtp")
 
@@ -44,7 +48,8 @@ def generate_professional_pdf(report_type: str, scan_data: dict, db: Session = N
         try:
             from models import CbomItem
             cbom_items = db.query(CbomItem).all()
-        except:
+        except (ImportError, SQLAlchemyError) as e:
+            log.warning("Failed to load CBOM items from database: %s", e, exc_info=True)
             cbom_items = []
     
     # Extract CBOM from scan_data if available
@@ -144,7 +149,8 @@ def _extract_bank_name(url: str) -> str:
         
         # Use first part if no skip pattern found
         return parts[0].title() + " Bank"
-    except:
+    except (IndexError, AttributeError, ValueError) as e:
+        log.warning("Failed to derive bank name from URL %r: %s", url, e, exc_info=True)
         return "Organization"
 
 

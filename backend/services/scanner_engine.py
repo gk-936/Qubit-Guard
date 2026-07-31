@@ -17,12 +17,16 @@ import socket
 import json
 import base64
 import time
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
 import urllib.request
+import urllib.error
 
 from services.pqc_algorithms import PQC_ALGORITHM_REGISTRY, generate_audit_table
 from services.ml_selector import select_algorithm as ml_select
+
+log = logging.getLogger(__name__)
 
 try:
     from cryptography import x509
@@ -397,7 +401,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
             with socket.create_connection((host, port), timeout=3) as sock:
                 ikev2_responsive = True
                 break
-        except Exception:
+        except OSError as e:
+            log.debug("IKEv2 port %s not responsive on %s: %s", port, host, e)
             continue
 
     # 3. VPN vendor heuristic from cert CN/SAN
@@ -527,8 +532,8 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                         "recommendation": "Transition to FIPS 204 (ML-DSA) certificates for B2B mTLS channels.",
                     })
                     pillar_qvs_scores.append(85)
-    except Exception:
-        pass
+    except (OSError, ssl.SSLError) as e:
+        log.debug("mTLS probe failed for %s: %s", api_url, e)
 
     # 2. JWT Analysis
     if jwt_token and "." in jwt_token:
@@ -557,8 +562,8 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                     "recommendation": "Migrate JWT signing to ML-DSA-65 (FIPS 204).",
                 })
                 pillar_qvs_scores.append(100)
-        except Exception:
-            pass
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError) as e:
+            log.debug("Could not parse JWT header for %s: %s", api_url, e)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 90
     return {"findings": findings, "qvs": avg_qvs}
@@ -592,8 +597,8 @@ def _scan_firmware(target: str) -> dict:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 if resp.status < 400:
                     fw_endpoints.append(path)
-        except Exception:
-            pass
+        except (urllib.error.URLError, OSError) as e:
+            log.debug("Firmware endpoint probe failed for %s%s: %s", host, path, e)
 
     # 3. Generate findings from real observations
     if tls_info["reachable"]:
@@ -695,8 +700,8 @@ def _scan_archival(target: str) -> dict:
                 val = resp.headers.get(h)
                 if val:
                     storage_headers[h] = val
-    except Exception:
-        pass
+    except (urllib.error.URLError, OSError) as e:
+        log.debug("Storage encryption header probe failed for %s: %s", host, e)
 
     # 3. Generate findings based on real observations
     if tls_info["reachable"]:

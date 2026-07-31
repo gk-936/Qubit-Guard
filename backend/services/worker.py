@@ -1,4 +1,5 @@
 import json
+import logging
 import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,6 +12,8 @@ from services.cbom_generator import generate_triad_cbom
 from services.remediation_service import generate_triad_remediation
 from services.discovery_service import discover_pnb_assets
 from services.mail_service import send_scan_report
+
+log = logging.getLogger(__name__)
 
 # Global scheduler instance
 scheduler = AsyncIOScheduler()
@@ -134,8 +137,8 @@ def register_schedule(schedule_obj: Schedule):
     # Parse HH:MM
     try:
         hour, minute = map(int, schedule_obj.scheduled_time.split(':'))
-    except:
-        print(f"[WORKER] Invalid time format: {schedule_obj.scheduled_time}")
+    except (ValueError, AttributeError) as e:
+        log.warning("Invalid schedule time format %r: %s", schedule_obj.scheduled_time, e, exc_info=True)
         return
 
     job_id = f"job_schedule_{schedule_obj.id}"

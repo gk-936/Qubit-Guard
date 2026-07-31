@@ -3,12 +3,15 @@ Qubit-Guard — FastAPI Backend Entry Point
 """
 
 import os
+import logging
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 from db import engine, Base, ensure_schema
 from seed_data import seed

@@ -6,14 +6,19 @@ Fulfills FR-01: Triad Asset Discovery with advanced reconnaissance.
 import socket
 import ssl
 import re
+import logging
 import urllib.request
+import urllib.error
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import dns.resolver
 import dns.zone
 import dns.query
+import dns.exception
 import json
 import ssl
+
+log = logging.getLogger(__name__)
 
 # --- 3. The Fuel: Expanded Dictionary Scope ---
 COMMON_SUBDOMAINS = [
@@ -60,10 +65,11 @@ def check_zone_transfer(domain: str) -> list:
                 if zone:
                     for name in zone.nodes.keys():
                         discovered.append(f"{name}.{domain}".strip('.'))
-            except Exception:
+            except (dns.exception.DNSException, OSError, EOFError) as e:
+                log.debug("AXFR zone transfer failed against %s for %s: %s", ns_host, domain, e)
                 continue
-    except Exception:
-        pass
+    except dns.exception.DNSException as e:
+        log.debug("NS lookup failed for %s: %s", domain, e)
     return list(set(discovered))
 
 def extract_sans(cert) -> list:
@@ -108,8 +114,8 @@ def scrape_web_hints(url: str) -> list:
             matches = re.findall(r'https?://([a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z]{2,})', content.lower())
             for m in matches:
                 hints.add(m)
-    except Exception:
-        pass
+    except (urllib.error.URLError, OSError) as e:
+        log.debug("Web hint scrape failed for %s: %s", url, e)
     return list(hints)
 
 def fetch_ct_logs(domain: str) -> list:
@@ -129,8 +135,8 @@ def fetch_ct_logs(domain: str) -> list:
                 for name in names:
                     if domain in name and "*" not in name:
                         discovered.add(name.strip())
-    except Exception:
-        pass # Fail gracefully if crt.sh is down
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        log.debug("CT log query failed for %s (crt.sh may be down): %s", domain, e)
     return list(discovered)
 
 def probe_host(host: str, base_domain: str) -> dict:
@@ -199,10 +205,10 @@ def probe_host(host: str, base_domain: str) -> dict:
                         
                         if sec_headers["HSTS"]:
                             asset_info["details"]["hsts_policy"] = headers.get("Strict-Transport-Security")
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except (urllib.error.URLError, OSError) as e:
+                    log.debug("Banner probe failed for %s: %s", host, e)
+    except (OSError, ssl.SSLError, ValueError) as e:
+        log.debug("TLS probe failed for %s: %s", host, e)
 
     # 2. Check for VPN (Pillar B) - Static Heuristics + Keyword analysis
     if "vpn" in host.lower() or "gate" in host.lower() or "remote" in host.lower():

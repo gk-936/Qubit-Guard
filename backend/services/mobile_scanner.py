@@ -7,8 +7,12 @@ import json
 import re
 import ssl
 import socket
+import logging
 import urllib.request
+import urllib.error
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 
 def search_mobile_apps(query: str = "") -> list:
@@ -84,8 +88,8 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
                     size_bytes = result.get("fileSizeBytes", 0)
                     if size_bytes:
                         metadata["size"] = f"{int(size_bytes) / (1024*1024):.1f} MB"
-        except Exception:
-            pass
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            log.debug("iOS store metadata fetch failed for %s: %s", app_id, e)
     else:
         # Android: Try Google Play Store page
         try:
@@ -106,8 +110,8 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
                     if ver_match:
                         metadata["version"] = ver_match.group(1)
                         break
-        except Exception:
-            pass
+        except (urllib.error.URLError, OSError) as e:
+            log.debug("Android store metadata fetch failed for %s: %s", app_id, e)
 
     return metadata
 
