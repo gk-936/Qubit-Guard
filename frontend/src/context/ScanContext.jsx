@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { getScanHistory, getScanById } from '../api';
 
 const ScanContext = createContext();
 
@@ -13,14 +14,9 @@ export const ScanProvider = ({ children }) => {
   // Fetch history on load
   const fetchHistory = async () => {
     try {
-      const res = await fetch('/api/scan/history', {
-        headers: {
-          'Authorization': localStorage.getItem('pnc_token') || ''
-        }
-      });
-      const json = await res.json();
-      if (json.success) {
-        setHistory(json.data);
+      const res = await getScanHistory();
+      if (res.data.success) {
+        setHistory(res.data.data);
       }
     } catch (err) {
       console.error('Failed to fetch history:', err);
@@ -30,18 +26,13 @@ export const ScanProvider = ({ children }) => {
   const fetchScanDetail = async (id) => {
     if (!id) return;
     try {
-      const res = await fetch(`/api/scan/${id}`, {
-        headers: {
-          'Authorization': localStorage.getItem('pnc_token') || ''
-        }
-      });
-      const json = await res.json();
-      if (json.success) {
-        setActiveData(json.data);
+      const res = await getScanById(id);
+      if (res.data.success) {
+        setActiveData(res.data.data);
         setActiveScanMetadata({
-          id: json.data.id,
-          target: json.data.webUrl,
-          timestamp: json.data.timestamp,
+          id: res.data.data.id,
+          target: res.data.data.webUrl,
+          timestamp: res.data.data.timestamp,
         });
       }
     } catch (err) {

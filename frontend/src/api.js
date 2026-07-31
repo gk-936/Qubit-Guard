@@ -44,6 +44,8 @@ api.interceptors.response.use(
 export const checkHealth = () => api.get('/health');
 
 export const runTriadScan = (data) => api.post('/scan/triad', data);
+export const getScanHistory = () => api.get('/scan/history');
+export const getScanById = (id) => api.get(`/scan/${id}`);
 
 export const analyzeVulnerabilities = (data) => api.post('/analyze', { data });
 
@@ -59,6 +61,7 @@ export const getDashboardData = () => api.get('/data/dashboard');
 export const getInventoryData = () => api.get('/data/inventory');
 export const deleteInventoryItem = (purl) => api.delete(`/data/inventory/${encodeURIComponent(purl)}`);
 export const getCbomData = () => api.get('/data/cbom');
+export const getRemediationData = () => api.get('/data/remediation');
 
 export const login = (credentials) => api.post('/auth/login', credentials);
 export const verifyToken = () => api.get('/auth/verify');

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { chatWithExpert } from '../api';
+import { chatWithExpert, getRemediationData } from '../api';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
 import ReactMarkdown from 'react-markdown';
@@ -45,18 +45,13 @@ const Remediation = () => {
   const loadFixes = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/data/remediation', {
-        headers: {
-          'X-Scan-Id': activeScanId,
-          'Authorization': localStorage.getItem('pnc_token') || ''
-        }
-      });
-      const json = await res.json();
-      if (json.success) {
-        setRemediations(json.data);
+      const res = await getRemediationData();
+      if (res.data.success) {
+        setRemediations(res.data.data);
       }
     } catch (err) {
       console.error('Failed to load remediation fixes:', err);
+      showToast('Failed to load remediation playbooks.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +66,7 @@ const Remediation = () => {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div className="card-title">
-            AI Auto-Remediation Deployment Scripts
+            Auto-Remediation Playbooks
             {activeScanMetadata && (
               <span style={{ marginLeft: '12px', fontSize: '11px', color: 'var(--pnb-gold)', fontWeight: 700 }}>
                  🛰️ AUDITING: {activeScanMetadata.target}
@@ -79,15 +74,15 @@ const Remediation = () => {
             )}
           </div>
           <button className="btn btn-gold btn-sm" onClick={loadFixes} disabled={isLoading}>
-            {isLoading ? 'Generating...' : '⚡ Regenerate AI Fixes'}
+            {isLoading ? 'Loading...' : '⚡ Reload Playbooks'}
           </button>
         </div>
         <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
-            The AI engine has parsed your Triad Scan results and generated standard PQC migration snippets (NIST SP 800-207/9370).
+            Curated, expert-authored PQC migration playbooks, auto-selected based on your Triad Scan findings (pillar + detected algorithm) and customized for your target domain (NIST SP 800-207/9370).
         </p>
-        
+
         {isLoading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ RUNNING AI REMEDIATION ENGINE...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ LOADING REMEDIATION PLAYBOOKS...</div>
         ) : (
             <div className="remed-accordion">
             {remediations.map((r, i) => (

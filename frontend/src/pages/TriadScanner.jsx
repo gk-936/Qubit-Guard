@@ -76,15 +76,9 @@ const TriadScanner = () => {
   const runTriadScan = async () => {
     setIsScanning(true);
     setShowResults(false);
-    setScanProgress('Initializing Triad Scanning Engine...');
+    setScanProgress('Running Triad scan...');
 
     try {
-      setScanProgress('Probing Web/TLS endpoints...');
-      await new Promise(r => setTimeout(r, 400));
-      setScanProgress('Analyzing VPN gateway protocols...');
-      await new Promise(r => setTimeout(r, 400));
-      setScanProgress('Parsing API tokens & mTLS config...');
-
       const response = await apiRunScan({
         webUrl: webTarget,
         vpnUrl: vpnTarget,
