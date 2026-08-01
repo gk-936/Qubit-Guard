@@ -42,13 +42,19 @@ The scanning engine categorizes cryptographic exposure across five infrastructur
 > They are never assigned an assumed score.
 
 ### 🔍 2. PQC-Aware Asset Discovery
-- **Certificate Transparency [LIVE]**: Queries `crt.sh` for certificates issued to the
-  target domain to surface subdomains not linked from the site.
+- **Certificate Transparency [LIVE]**: Queries **two independent CT log sources** —
+  `crt.sh` and Cert Spotter — for certificates issued to the target domain, so an
+  outage of either source doesn't silently drop this discovery channel.
 - **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers.
   Almost always refused in practice, which is the correct result.
-- **Dictionary Probing [LIVE]**: Tries a 95-entry subdomain wordlist. **Every candidate
-  must resolve in DNS before it is reported** — unresolved guesses are discarded, not
-  listed as discovered assets.
+- **DNS Record Enumeration [LIVE]**: Queries the domain's real MX and TXT (SPF)
+  records and extracts any self-referencing hostnames — published infrastructure
+  data, not a guess.
+- **Reverse DNS [LIVE]**: PTR-looks-up the IP of every host already found, which can
+  surface a hostname that was never in the wordlist, a certificate, or a CT log.
+- **Dictionary Probing [LIVE]**: Tries a 130+-entry subdomain wordlist. **Every
+  candidate must resolve in DNS before it is reported** — unresolved guesses are
+  discarded, not listed as discovered assets.
 - **Pillar Bucketing [STATIC]**: Discovered hosts are bucketed into Web/VPN/API by
   hostname keyword (`vpn.*`, `api.*`). This is a naming heuristic, not protocol detection,
   and is labelled "Inferred" in the output.

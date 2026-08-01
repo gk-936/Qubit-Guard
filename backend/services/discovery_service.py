@@ -15,6 +15,7 @@ import dns.resolver
 import dns.zone
 import dns.query
 import dns.exception
+import dns.reversename
 import json
 import ssl
 
@@ -145,18 +146,107 @@ def fetch_ct_logs(domain: str) -> list:
         log.debug("CT log query failed for %s (crt.sh may be down): %s", domain, e)
     return list(discovered)
 
+def fetch_certspotter_ct(domain: str) -> list:
+    """
+    --- 1b. A second, independent CT log source ---
+    crt.sh aggregates most public CT logs but is a single point of failure
+    (already seen going down/timing out in practice — see the comment on
+    fetch_ct_logs). Cert Spotter (sslmate.com) indexes CT logs independently
+    and exposes a free, unauthenticated JSON endpoint for exactly this
+    query, so if crt.sh is unreachable this still returns real results
+    instead of silently losing an entire discovery channel.
+    """
+    discovered = set()
+    try:
+        url = f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names"
+        req = urllib.request.Request(url, headers={'User-Agent': 'QuantumShield-OSINT/1.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            for entry in data:
+                for name in entry.get('dns_names', []):
+                    if domain in name and "*" not in name:
+                        discovered.add(name.strip().lower())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        log.debug("Cert Spotter query failed for %s: %s", domain, e)
+    return list(discovered)
+
+def fetch_dns_record_hints(domain: str) -> list:
+    """
+    --- 1c. Active DNS record enumeration (MX/TXT) ---
+    MX records name a domain's real mail infrastructure hostnames directly
+    (e.g. "mx1.mailgateway.bank.in"), and TXT records — particularly SPF
+    ("v=spf1 include:...") — routinely reference other real subdomains
+    authorized to send mail for the domain. Both are standard, publicly
+    published DNS data (not a guess), and dnspython is already a
+    dependency, so this costs two extra DNS queries for a genuinely
+    different discovery signal than dictionary guessing.
+    """
+    discovered = set()
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 3
+    resolver.lifetime = 3
+
+    try:
+        for rdata in resolver.resolve(domain, 'MX'):
+            host = str(rdata.exchange).rstrip('.').lower()
+            if domain in host:
+                discovered.add(host)
+    except (dns.exception.DNSException, OSError) as e:
+        log.debug("MX lookup failed for %s: %s", domain, e)
+
+    try:
+        for rdata in resolver.resolve(domain, 'TXT'):
+            txt = str(rdata).strip('"')
+            for match in re.findall(r'(?:include|redirect)[:=]([a-z0-9.\-]+)', txt.lower()):
+                if domain in match:
+                    discovered.add(match.rstrip('.'))
+    except (dns.exception.DNSException, OSError) as e:
+        log.debug("TXT lookup failed for %s: %s", domain, e)
+
+    return list(discovered)
+
+def reverse_dns_hosts(ips: set, domain: str) -> list:
+    """
+    --- 7. Reverse-DNS on already-discovered IPs ---
+    A completely different discovery vector from everything above: given
+    the real IP addresses of hosts already found, ask DNS "what hostname
+    points here?" (a PTR lookup). This sometimes reveals an internal or
+    alternate hostname for the same server that was never in the wordlist
+    and was never mentioned in a certificate or CT log — e.g. a load
+    balancer's real hostname behind a CNAME. Passive from the target's
+    perspective (a PTR query only touches public DNS, never the host
+    itself), so it adds signal at negligible cost.
+    """
+    discovered = set()
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 2
+    resolver.lifetime = 2
+
+    for ip in ips:
+        try:
+            rev_name = dns.reversename.from_address(ip)
+            for rdata in resolver.resolve(rev_name, 'PTR'):
+                host = str(rdata).rstrip('.').lower()
+                if domain in host:
+                    discovered.add(host)
+        except (dns.exception.DNSException, OSError, ValueError) as e:
+            log.debug("Reverse DNS lookup failed for %s: %s", ip, e)
+
+    return list(discovered)
+
 def probe_host(host: str, base_domain: str) -> dict:
     """
     Worker function to probe a single host.
     """
     # 1. DNS Resolution (Pillar 0)
     try:
-        socket.gethostbyname(host)
+        resolved_ip = socket.gethostbyname(host)
     except socket.gaierror:
         return None
 
     asset_info = {
         "host": host,
+        "ip": resolved_ip,
         "pillars": [],
         "pqc_ready": False,
         "details": {}
@@ -171,15 +261,15 @@ def probe_host(host: str, base_domain: str) -> dict:
         context.verify_mode = ssl.CERT_NONE  # Discovery mode: accept all certs to extract data
         
         # This is the probe that gates whether a candidate is counted as "found" at
-        # all. Was 1s originally (too tight under 30-way concurrent load — a full
-        # TCP+TLS handshake needs multiple round trips — and was very likely
-        # undercounting real, live subdomains), then 4s (still short of what the
-        # Triad Scanner itself uses for the identical operation). Now actually
-        # matches that 8s, rather than just approximating it, on the theory that
-        # under-discovering real assets is a worse failure mode here than a
-        # slightly longer scan — a candidate that resolves in DNS but is slow to
-        # complete a handshake under concurrent load is still a real asset.
-        with socket.create_connection((host, 443), timeout=8) as sock:
+        # all. Was 1s originally (too tight under 30-way concurrent load), then 4s,
+        # then 8s to match the Triad Scanner's own per-host timeout. Brought back
+        # down to 3s: with the passive DNS/CT-based discovery methods below now
+        # doing most of the real subdomain-finding work, the dictionary probe's
+        # job is narrower (confirm which of ~130 guessed candidates are live) and
+        # doesn't need to individually wait as long per host — keeping the whole
+        # scan responsive matters more here than squeezing out the last few
+        # slow-to-handshake dictionary guesses.
+        with socket.create_connection((host, 443), timeout=3) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
@@ -307,10 +397,18 @@ def discover_pnb_assets(target_base: str) -> dict:
         if base_domain in hint:
             targets_to_probe.add(hint)
 
-    # 4. Passive OSINT: Certificate Transparency Logs
-    ct_results = fetch_ct_logs(base_domain)
+    # 4. Passive OSINT: Certificate Transparency Logs — two independent sources,
+    # since crt.sh being unreachable would otherwise silently drop this whole
+    # discovery channel (already documented as happening in practice).
+    ct_results = set(fetch_ct_logs(base_domain)) | set(fetch_certspotter_ct(base_domain))
     for ct_host in ct_results:
         targets_to_probe.add(ct_host)
+
+    # 5. Active DNS record enumeration — MX/TXT hostnames are published,
+    # real infrastructure references, not guesses.
+    dns_hint_results = fetch_dns_record_hints(base_domain)
+    for hint_host in dns_hint_results:
+        targets_to_probe.add(hint_host)
 
     discovered_assets = []
     seen_hosts = set()
@@ -357,12 +455,33 @@ def discover_pnb_assets(target_base: str) -> dict:
                     discovered_assets.append(asset)
                     seen_hosts.add(asset["host"])
 
+    # 8. Reverse-DNS on every IP found so far — a genuinely different signal
+    # from everything above (asks DNS directly, doesn't guess a name and
+    # check it), can surface hostnames never in the wordlist, a certificate,
+    # or a CT log.
+    discovered_ips = {a["ip"] for a in discovered_assets if a.get("ip")}
+    ptr_hosts = set(reverse_dns_hosts(discovered_ips, base_domain)) - seen_hosts if discovered_ips else set()
+
+    if ptr_hosts:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            ptr_futures = {executor.submit(probe_host, host, base_domain): host for host in ptr_hosts}
+            for future in as_completed(ptr_futures):
+                asset = future.result()
+                if asset and asset["host"] not in seen_hosts:
+                    discovered_assets.append(asset)
+                    seen_hosts.add(asset["host"])
+
     return {
         "base_domain": base_domain,
         "assets": discovered_assets,
         "total_found": len(discovered_assets),
         "axfr_success": len(axfr_results) > 0,
-        "notes": f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR records. {len(san_hosts)} SAN-derived hosts.",
+        "notes": (
+            f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR records. "
+            f"{len(ct_results)} CT-log hosts (crt.sh + Cert Spotter). {len(dns_hint_results)} "
+            f"MX/TXT-derived hosts. {len(san_hosts)} SAN-derived hosts. {len(ptr_hosts)} "
+            f"reverse-DNS-derived hosts."
+        ),
         "mobile_apps": fetch_mobile_apps_for_discovery(base_domain)
     }
 
