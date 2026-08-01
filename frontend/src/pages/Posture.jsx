@@ -89,7 +89,6 @@ const Posture = () => {
             <tr>
               <th>Service Infrastructure</th>
               <th>Category</th>
-              <th>Tech Profile</th>
               <th>Active Algorithm</th>
               <th>Risk Level</th>
               <th>NIST Status</th>
@@ -100,7 +99,6 @@ const Posture = () => {
               <tr key={i}>
                 <td style={{ fontWeight: 700, color: '#111' }}>{item.component}</td>
                 <td><span className="risk-badge rb-low" style={{ background: '#eee', color: '#666', fontSize: '10px' }}>{item.category}</span></td>
-                <td>{item.version}</td>
                 <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '11px' }}>{item.algorithm}</td>
                 <td>
                   <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : item.risk === 'High' ? 'rb-high' : item.risk === 'Not Assessed' ? 'rb-na' : 'rb-low'}`}>
@@ -114,7 +112,7 @@ const Posture = () => {
             ))}
             {cbomItems.length === 0 && (
               <tr>
-                <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                <td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
                   No active scan data found. Please initiate an audit from the Dashboard.
                 </td>
               </tr>
