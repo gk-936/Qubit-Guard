@@ -23,11 +23,20 @@ def search_mobile_apps(query: str = "") -> list:
 
     results = []
     
-    # Apple iTunes Search API — reliable public API for discovering mobile apps
+    # Apple iTunes Search API — reliable public API for discovering mobile apps.
+    # Restricted to the Indian App Store storefront: every bank this tool audits
+    # is Indian, but common abbreviations like "PNB" collide with completely
+    # unrelated banks worldwide (Philippine National Bank, several different US
+    # "Peoples National Bank"s, Pike National Bank...). Confirmed live: searching
+    # "PNB" without a country filter returned 10 apps, only 3 of which were
+    # actually Punjab National Bank's. Restricting to country=IN cut that down to
+    # 1 false positive out of 15 (and surfaced real PNB apps the unfiltered
+    # search had missed, e.g. BHIM PNB, PNB Digital Rupee). It doesn't fully
+    # eliminate cross-region false positives on its own — see the developer-name
+    # field returned below, which is the stronger signal for telling them apart.
     try:
-        # Search for software in the store matching the query (e.g., 'pnb')
         search_query = urllib.parse.quote(query)
-        url = f"https://itunes.apple.com/search?term={search_query}&entity=software&limit=15"
+        url = f"https://itunes.apple.com/search?term={search_query}&entity=software&limit=20&country=IN"
         req = urllib.request.Request(url, headers={"User-Agent": "QuantumShield-Discovery/2.0"})
         
         with urllib.request.urlopen(req, timeout=5) as resp:

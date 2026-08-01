@@ -89,6 +89,7 @@ const MobileScanner = () => {
             <thead>
               <tr>
                 <th>App Name</th>
+                <th>Developer</th>
                 <th>Platform</th>
                 <th>Package ID / SKU</th>
                 <th>Store Status</th>
@@ -106,6 +107,19 @@ const MobileScanner = () => {
                         ⚠ inferred from iOS listing — not independently verified
                       </div>
                     )}
+                  </td>
+                  <td style={{
+                    fontSize: '12px',
+                    // A search for a common bank abbreviation (e.g. "PNB") can also match
+                    // completely unrelated banks worldwide that share it — this is the
+                    // strongest signal for telling them apart, so a developer name that
+                    // doesn't contain the search term at all is flagged for a second look.
+                    color: app.developer && searchQuery && !app.developer.toLowerCase().includes(searchQuery.toLowerCase())
+                      ? '#a66a00' : '#333',
+                    fontWeight: app.developer && searchQuery && !app.developer.toLowerCase().includes(searchQuery.toLowerCase())
+                      ? 600 : 400,
+                  }}>
+                    {app.developer || 'Unknown'}
                   </td>
                   <td style={{ color: app.platform === 'Android' ? '#A4C639' : '#555' }}>
                     {app.platform === 'Android' ? '🤖 Android' : '🍏 iOS'}
