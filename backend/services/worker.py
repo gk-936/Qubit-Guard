@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
-from db import SessionLocal
+from db import SessionLocal, with_retry
 from models import Schedule, ScanResult
 from services.scanner_engine import perform_triad_scan
 from services.api_scanner import discover_endpoints
@@ -104,7 +104,7 @@ async def run_automated_scan_and_email(schedule_id: int):
             # skip inactive schedules) — so a one-time scan would silently start
             # firing again after every server restart.
             schedule.is_active = False
-        db.commit()
+        with_retry(lambda: db.commit())
 
         # 4. Prepare scan_data for email
         # We need to map some fields to what the mail service expects

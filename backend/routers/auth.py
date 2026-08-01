@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from db import get_db
 from models import User
 from security import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRE_HOURS
+from services.audit_service import log_audit_event
 
 router = APIRouter()
 
@@ -39,7 +40,14 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
                 JWT_SECRET,
                 algorithm=JWT_ALGORITHM,
             )
+            log_audit_event({"action": "LOGIN_SUCCESS", "user": user.username})
             return {"success": True, "token": token, "user": {"username": user.username, "role": user.role}}
+    # audit_service.py bills itself as being "for non-repudiation and
+    # compliance", but login — the one event that claim is most obviously
+    # about — was never logged at all before this. Logging the attempted
+    # username on failure too (not just successes) so a real auditor can see
+    # brute-force/guessing attempts, not only successful sessions.
+    log_audit_event({"action": "LOGIN_FAILURE", "user": body.username})
     return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
 
 

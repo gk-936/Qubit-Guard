@@ -17,6 +17,7 @@ import socket
 import json
 import base64
 import time
+import uuid
 import logging
 from datetime import datetime
 from urllib.parse import urlparse
@@ -865,7 +866,14 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
     Returns deterministic, verifiable findings with QVS scores (0-100)
     and ML Selector recommendations.
     """
-    scan_id = f"scan_{int(datetime.utcnow().timestamp() * 1000)}"
+    # A plain millisecond timestamp has no collision protection: scan_id is a
+    # `unique=True` DB column with no try/except around the commit (routers/
+    # scan.py, services/worker.py), so two requests landing in the same
+    # millisecond would raise an unhandled IntegrityError -> 500. Confirmed
+    # live that concurrent scans of different targets can land 1ms apart —
+    # the random suffix makes a same-millisecond collision astronomically
+    # unlikely instead of merely unlikely.
+    scan_id = f"scan_{int(datetime.utcnow().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
 
     web_result = _scan_web_tls(web_url)
     vpn_result = _scan_vpn_tls(vpn_url)

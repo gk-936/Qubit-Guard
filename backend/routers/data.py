@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from db import get_db
+from db import get_db, with_retry
 from models import DashboardSummary, InventoryStat, PostureStat, CbomVulnerabilitySummary, CbomItem, ScanResult
 from services.cbom_generator import generate_cyclonedx
 from services.mail_service import send_scan_report, send_scan_report_async, generate_professional_pdf, _extract_bank_name
@@ -66,9 +66,9 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            risk_scores = json.loads(scan.risk_scores_json)
-            cbom = json.loads(scan.cbom_json)
-            findings = json.loads(scan.findings_json)
+            risk_scores = json.loads(scan.risk_scores_json or '{}')
+            cbom = json.loads(scan.cbom_json or '{}')
+            findings = json.loads(scan.findings_json or '{}')
             # Derive dashboard stats directly from structural scan results (no fakes)
             comp_count = len(cbom.get("components", []))
             
@@ -192,7 +192,7 @@ def get_inventory(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            cbom = json.loads(scan.cbom_json)
+            cbom = json.loads(scan.cbom_json or '{}')
             data = [
                 {
                     "component": c["name"],
@@ -255,7 +255,7 @@ def delete_asset(purl: str, db: Session = Depends(get_db)):
     if item:
         deleted_purl = item.purl
         db.delete(item)
-        db.commit()
+        with_retry(lambda: db.commit())
         return {"success": True, "message": f"Asset {deleted_purl} removed successfully."}
 
     return JSONResponse(
@@ -271,7 +271,7 @@ def get_cbom(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            cbom = json.loads(scan.cbom_json)
+            cbom = json.loads(scan.cbom_json or '{}')
             cbom_items = [
                 {
                     "component": c["name"],
@@ -376,7 +376,7 @@ def get_remediation(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            findings = json.loads(scan.findings_json)
+            findings = json.loads(scan.findings_json or '{}')
             return {"success": True, "data": generate_triad_remediation(findings, scan.web_url, scan.vpn_url, scan.api_url)}
     
     return {"success": True, "data": []}
@@ -432,9 +432,9 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
     if latest_scan:
         try:
             import json
-            scan_findings = json.loads(latest_scan.findings_json)
-            risk_scores = json.loads(latest_scan.risk_scores_json)
-            cbom_data = json.loads(latest_scan.cbom_json)
+            scan_findings = json.loads(latest_scan.findings_json or '{}')
+            risk_scores = json.loads(latest_scan.risk_scores_json or '{}')
+            cbom_data = json.loads(latest_scan.cbom_json or '{}')
             
             # Map simplified findings for the summary counts
             # findings is used for the summary table counts in some reports
@@ -527,7 +527,7 @@ def add_inventory_item(body: InventoryItemRequest, db: Session = Depends(get_db)
         source="manual"
     )
     db.add(new_item)
-    db.commit()
+    with_retry(lambda: db.commit())
     db.refresh(new_item)
     return {"success": True, "message": "Asset added successfully."}
 
@@ -550,9 +550,9 @@ def download_pdf_report(type: str = "executive", db: Session = Depends(get_db)):
     
     if latest_scan:
         try:
-            scan_data["findings"] = json.loads(latest_scan.findings_json)
-            scan_data["riskScores"] = json.loads(latest_scan.risk_scores_json)
-            scan_data["cbom"] = json.loads(latest_scan.cbom_json)
+            scan_data["findings"] = json.loads(latest_scan.findings_json or '{}')
+            scan_data["riskScores"] = json.loads(latest_scan.risk_scores_json or '{}')
+            scan_data["cbom"] = json.loads(latest_scan.cbom_json or '{}')
             
             # Map simplified findings for the PDF generator internal logic
             scan_data["web_findings"] = scan_data["findings"].get("web", [])
