@@ -58,10 +58,17 @@ app = FastAPI(
 # allow_origins=["*"] together with allow_credentials=True is an invalid
 # combination per the CORS spec — browsers reject it outright — so a
 # wildcard was never actually working safely here to begin with.
+#
+# Deliberately falls back to the default on an EMPTY value too, not just an
+# absent one: os.getenv("CORS_ORIGINS", default) only applies the default
+# when the key is unset. A deployer copying the .env template with
+# `CORS_ORIGINS=` left blank would otherwise get os.getenv() back an empty
+# string, split into an empty allowlist — silently blocking every origin,
+# including localhost. Blank is treated as "not configured", same as unset.
 _default_cors_origins = "http://localhost:5173,http://127.0.0.1:5173"
 CORS_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", _default_cors_origins).split(",")
+    for origin in (os.getenv("CORS_ORIGINS") or _default_cors_origins).split(",")
     if origin.strip()
 ]
 
