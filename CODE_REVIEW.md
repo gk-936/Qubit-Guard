@@ -72,6 +72,8 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🆕 | Further discovery methods requested | ✅ Added same-domain nameserver harvesting, sitemap.xml parsing, Wayback Machine history lookup (verified live against `pnb.bank.in`: found `ns1-ns4.pnb.bank.in` — real PNB-run DNS infrastructure no other method here can see, since nameservers never serve HTTPS/TLS) |
 | 🆕 | Posture page's crypto inventory table read raw CBOM field names (`name`/`crypto`) that don't exist — every column but version/NIST-status rendered blank | ✅ Fixed (now calls the same `/api/data/cbom` transform `CBOM.jsx` already used correctly) |
 | 🆕 | `quantumSafe: None` (not assessed) collapsed into `risk: "Critical"` / "❌ VULNERABLE" in both the backend transform and two frontend pages | ✅ Fixed (explicit "Not Assessed" case, neutral badge styling, found while verifying the fix above) |
+| 🆕 | Discovery's OSINT-gathering calls ran sequentially (sum of all latencies, not max); `reverse_dns_hosts` wasn't parallelized at all | ✅ Fixed — both parallelized. Verified live against `pnb.bank.in`: 2m31s → 41.5s for identical results (68 assets, 108 CT hosts, 4 NS records) |
+| 🆕 | ASN/BGP IP-range discovery requested | ✅ Added via RIPEstat's public API — caught and fixed my own mistake first (initial draft targeted `api.bgpview.io`, confirmed via direct DNS lookup that this hostname does not exist, before it ever reached the live pipeline) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as

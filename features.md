@@ -56,8 +56,15 @@ The scanning engine categorizes cryptographic exposure across five infrastructur
   host ever crawled under the domain — the only method here that can surface a
   subdomain that's no longer referenced anywhere current (decommissioned but
   possibly still live), which every other method by definition cannot find.
-- **Reverse DNS [LIVE]**: PTR-looks-up the IP of every host already found, which can
-  surface a hostname that was never in the wordlist, a certificate, or a CT log.
+- **Reverse DNS [LIVE]**: PTR-looks-up the IP of every host already found (parallelized
+  across a thread pool), which can surface a hostname that was never in the wordlist,
+  a certificate, or a CT log.
+- **ASN/BGP IP-Range Discovery [LIVE]**: Looks up the IP address space the target
+  organization's own network actually announces (via RIPEstat's public routing data
+  API) and reverse-DNS sweeps a bounded sample. The only method that starts from
+  "what IP space does this org own" rather than a hostname guess. Yield varies
+  significantly by target — an organization hosted inside a shared ISP/cloud provider's
+  address space (common) will find little; one running its own dedicated network won't.
 - **Dictionary Probing [LIVE]**: Tries a 130+-entry subdomain wordlist. **Every
   candidate must resolve in DNS before it is reported** — unresolved guesses are
   discarded, not listed as discovered assets.
