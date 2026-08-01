@@ -7,6 +7,7 @@ import socket
 import ssl
 import re
 import logging
+import ipaddress
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -253,7 +254,26 @@ def fetch_dns_record_hints(domain: str) -> list:
 
     return list(discovered)
 
-def reverse_dns_hosts(ips: set, domain: str) -> list:
+def _ptr_lookup(ip: str, domain: str) -> str:
+    """Single PTR lookup — the per-IP worker used by reverse_dns_hosts() and
+    the ASN sweep below. A 1.5s resolver timeout is enough for a PTR query
+    (a single UDP round trip to a resolver, not a TCP+TLS handshake like the
+    host probes elsewhere in this file); most non-existent PTR records come
+    back as a fast NXDOMAIN rather than actually timing out."""
+    try:
+        rev_name = dns.reversename.from_address(ip)
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 1.5
+        resolver.lifetime = 1.5
+        for rdata in resolver.resolve(rev_name, 'PTR'):
+            host = str(rdata).rstrip('.').lower()
+            if domain in host:
+                return host
+    except (dns.exception.DNSException, OSError, ValueError) as e:
+        log.debug("Reverse DNS lookup failed for %s: %s", ip, e)
+    return None
+
+def reverse_dns_hosts(ips: set, domain: str, max_workers: int = 25) -> list:
     """
     --- 7. Reverse-DNS on already-discovered IPs ---
     A completely different discovery vector from everything above: given
@@ -264,23 +284,110 @@ def reverse_dns_hosts(ips: set, domain: str) -> list:
     balancer's real hostname behind a CNAME. Passive from the target's
     perspective (a PTR query only touches public DNS, never the host
     itself), so it adds signal at negligible cost.
+
+    Parallelized across a thread pool — this used to be a plain `for ip in
+    ips: ...` loop, so a target with many discovered IPs (a real bank can
+    easily have 60-70+) meant up to ~1.5-2s of sequential wait *per IP*,
+    which was very likely the single largest contributor to total scan time
+    for exactly the targets this tool matters most for.
     """
+    if not ips:
+        return []
     discovered = set()
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 2
-    resolver.lifetime = 2
-
-    for ip in ips:
-        try:
-            rev_name = dns.reversename.from_address(ip)
-            for rdata in resolver.resolve(rev_name, 'PTR'):
-                host = str(rdata).rstrip('.').lower()
-                if domain in host:
-                    discovered.add(host)
-        except (dns.exception.DNSException, OSError, ValueError) as e:
-            log.debug("Reverse DNS lookup failed for %s: %s", ip, e)
-
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_ptr_lookup, ip, domain): ip for ip in ips}
+        for future in as_completed(futures):
+            host = future.result()
+            if host:
+                discovered.add(host)
     return list(discovered)
+
+def fetch_asn_ip_range_hosts(domain: str, max_ips_to_sweep: int = 150) -> list:
+    """
+    --- 9. ASN/BGP IP-range discovery ---
+    Finds the IP address space the organization's own network (its
+    Autonomous System) actually announces to the internet, via RIPEstat's
+    free, unauthenticated public data API, then reverse-DNS sweeps a
+    bounded sample of those addresses. This is a fundamentally different
+    starting point from
+    every method above: instead of starting from a hostname and checking
+    whether it resolves, it starts from "which IP space does this
+    organization actually own" and asks what's running there — the
+    technique real recon tooling (Amass, etc.) uses to find infrastructure
+    that has no public DNS name pointing at it from anywhere else yet (a
+    freshly-provisioned host, an internal load balancer, a backup node
+    reachable only by IP).
+
+    Deliberately bounded: a bank's announced ranges can span tens of
+    thousands of addresses, and reverse-DNS-ing all of them would turn a
+    few-second lookup into a scan lasting minutes. Only the first
+    `max_ips_to_sweep` addresses across all announced prefixes are checked
+    — the discovery response's notes field reports exactly how many, so
+    this trade-off is visible to the caller, not silently hidden.
+    """
+    # Uses RIPEstat's free, unauthenticated public data API (stat.ripe.net) —
+    # aggregates routing data across all 5 RIRs (ARIN/RIPE/APNIC/LACNIC/
+    # AFRINIC), so it isn't limited to European-registered address space
+    # despite the "RIPE" name. Verified reachable directly before using it
+    # here; an earlier draft of this function targeted a BGPView hostname
+    # that turned out not to resolve at all.
+    try:
+        seed_ip = socket.gethostbyname(domain)
+    except socket.gaierror:
+        return []
+
+    try:
+        req = urllib.request.Request(
+            f"https://stat.ripe.net/data/network-info/data.json?resource={seed_ip}",
+            headers={'User-Agent': 'QuantumShield-OSINT/1.0'},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            net_info = json.loads(resp.read().decode('utf-8'))
+        asns = net_info.get("data", {}).get("asns", [])
+        if not asns:
+            return []
+        asn = asns[0]
+
+        req2 = urllib.request.Request(
+            f"https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{asn}",
+            headers={'User-Agent': 'QuantumShield-OSINT/1.0'},
+        )
+        with urllib.request.urlopen(req2, timeout=8) as resp2:
+            prefix_data = json.loads(resp2.read().decode('utf-8'))
+        prefixes = prefix_data.get("data", {}).get("prefixes", [])
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError, IndexError) as e:
+        log.debug("ASN/BGP lookup failed for %s (seed IP %s): %s", domain, seed_ip, e)
+        return []
+
+    # Skip IPv6 prefixes (ip_network(strict=False) parses them fine, but a
+    # sweep of individual /48-style IPv6 host addresses would go nowhere
+    # inside a bounded budget) and only take a bounded sample of hosts,
+    # smallest prefixes first — a /24 has 254 usable addresses to fully
+    # cover for the sample budget, a /18 has 16,382 and would otherwise
+    # eat the entire budget on one prefix out of what can be 100+.
+    ipv4_prefixes = []
+    for pfx in prefixes:
+        cidr = pfx.get("prefix", "")
+        if ":" in cidr:
+            continue
+        try:
+            ipv4_prefixes.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            continue
+    ipv4_prefixes.sort(key=lambda n: n.num_addresses)
+
+    candidate_ips = []
+    for network in ipv4_prefixes:
+        for ip in network.hosts():
+            candidate_ips.append(str(ip))
+            if len(candidate_ips) >= max_ips_to_sweep:
+                break
+        if len(candidate_ips) >= max_ips_to_sweep:
+            break
+
+    if not candidate_ips:
+        return []
+    return reverse_dns_hosts(set(candidate_ips), domain, max_workers=30)
 
 def probe_host(host: str, base_domain: str) -> dict:
     """
@@ -429,40 +536,61 @@ def discover_pnb_assets(target_base: str) -> dict:
     parsed_base = urlparse(target_base if target_base.startswith("http") else f"https://{target_base}")
     base_domain = parsed_base.hostname or target_base
 
-    # 1. Zone transfer attempt (jackpot if it works)
-    axfr_results = check_zone_transfer(base_domain)
+    # 1. Run every independent OSINT/gathering source in parallel. These are
+    # 7 separate network calls to 6 different external services (local DNS,
+    # the target's own web server, crt.sh, Cert Spotter, archive.org,
+    # RIPEstat) with zero dependency on each other — running them one after
+    # another (as this used to) meant total gathering time was roughly the
+    # SUM of every method's latency instead of the MAX of the slowest one.
+    # This was very likely the single largest driver of total scan time as
+    # more discovery methods were added; the actual host-probing rounds
+    # below still have to run sequentially after this (permutations/SAN
+    # hosts/reverse-DNS all depend on what the previous round found), but
+    # the gathering phase itself has no such dependency.
+    gather_sources = {
+        "axfr": check_zone_transfer,
+        "web_hints": lambda d: scrape_web_hints(f"https://{d}"),
+        "ct_crtsh": fetch_ct_logs,
+        "ct_certspotter": fetch_certspotter_ct,
+        "dns_hints": fetch_dns_record_hints,
+        "wayback": fetch_wayback_hosts,
+        "asn": fetch_asn_ip_range_hosts,
+    }
+    gathered = {}
+    with ThreadPoolExecutor(max_workers=len(gather_sources)) as executor:
+        future_to_source = {executor.submit(fn, base_domain): name for name, fn in gather_sources.items()}
+        for future in as_completed(future_to_source):
+            name = future_to_source[future]
+            try:
+                gathered[name] = future.result()
+            except Exception as e:
+                log.debug("Discovery source '%s' raised: %s", name, e)
+                gathered[name] = []
 
-    # 2. Build probe targets from ALL common subdomains + AXFR results
+    axfr_results = gathered["axfr"]
+    web_hints = gathered["web_hints"]
+    ct_results = set(gathered["ct_crtsh"]) | set(gathered["ct_certspotter"])
+    dns_hint_results = gathered["dns_hints"]
+    wayback_results = gathered["wayback"]
+    asn_results = gathered["asn"]
+
+    # 2. Build probe targets from every gathered source + the dictionary
     targets_to_probe = set()
     for sub in COMMON_SUBDOMAINS:  # Probe the full dictionary
         targets_to_probe.add(f"{sub}.{base_domain}" if sub else base_domain)
     for axfr_host in axfr_results:
         targets_to_probe.add(axfr_host)
-
-    # 3. Web scraping for additional subdomain hints
-    web_hints = scrape_web_hints(f"https://{base_domain}")
     for hint in web_hints:
         if base_domain in hint:
             targets_to_probe.add(hint)
-
-    # 4. Passive OSINT: Certificate Transparency Logs — two independent sources,
-    # since crt.sh being unreachable would otherwise silently drop this whole
-    # discovery channel (already documented as happening in practice).
-    ct_results = set(fetch_ct_logs(base_domain)) | set(fetch_certspotter_ct(base_domain))
     for ct_host in ct_results:
         targets_to_probe.add(ct_host)
-
-    # 5. Active DNS record enumeration — MX/TXT hostnames are published,
-    # real infrastructure references, not guesses.
-    dns_hint_results = fetch_dns_record_hints(base_domain)
     for hint_host in dns_hint_results:
         targets_to_probe.add(hint_host)
-
-    # 6. Historical discovery — hosts that used to exist and may still
-    # resolve/respond even though nothing currently live references them.
-    wayback_results = fetch_wayback_hosts(base_domain)
     for wb_host in wayback_results:
         targets_to_probe.add(wb_host)
+    for asn_host in asn_results:
+        targets_to_probe.add(asn_host)
 
     discovered_assets = []
     seen_hosts = set()
@@ -534,7 +662,8 @@ def discover_pnb_assets(target_base: str) -> dict:
             f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR/NS records. "
             f"{len(ct_results)} CT-log hosts (crt.sh + Cert Spotter). {len(dns_hint_results)} "
             f"MX/TXT-derived hosts. {len(wayback_results)} Wayback-Machine-derived hosts. "
-            f"{len(san_hosts)} SAN-derived hosts. {len(ptr_hosts)} reverse-DNS-derived hosts."
+            f"{len(asn_results)} ASN/BGP-range-derived hosts. {len(san_hosts)} SAN-derived hosts. "
+            f"{len(ptr_hosts)} reverse-DNS-derived hosts."
         ),
         "mobile_apps": fetch_mobile_apps_for_discovery(base_domain)
     }
