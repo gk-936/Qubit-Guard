@@ -135,52 +135,62 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     """Fetch real app metadata from store APIs."""
     metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None, "seller_domain_basis": None, "seller_name": None}
 
-    if platform == "iOS":
-        # Apple iTunes Lookup API — public, reliable JSON API
-        try:
-            url = f"https://itunes.apple.com/lookup?bundleId={app_id}"
-            req = urllib.request.Request(url, headers={"User-Agent": "QuantumShield-Scanner/2.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-                if data.get("resultCount", 0) > 0:
-                    result = data["results"][0]
+    # Look up the iTunes entry for this bundle ID regardless of platform. Android
+    # entries in this tool always reuse the exact same bundle ID as their iOS
+    # counterpart (see search_mobile_apps' "derived-from-ios" entries) — the real
+    # company behind the app doesn't change with the platform, so the same
+    # sellerUrl/sellerName-based domain discovery applies to both. Previously this
+    # only ran for platform == "iOS", so scanning the *Android* row for an app that
+    # needed the sellerName fallback (e.g. PNB ONE) fell straight back to the
+    # unreliable bundle-ID guess even though the iOS scan of the identical app ID
+    # already had a confirmed answer.
+    try:
+        url = f"https://itunes.apple.com/lookup?bundleId={app_id}"
+        req = urllib.request.Request(url, headers={"User-Agent": "QuantumShield-Scanner/2.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("resultCount", 0) > 0:
+                result = data["results"][0]
+                if platform == "iOS":
                     metadata["version"] = result.get("version", "Unknown")
                     metadata["name"] = result.get("trackName")
                     size_bytes = result.get("fileSizeBytes", 0)
                     if size_bytes:
                         metadata["size"] = f"{int(size_bytes) / (1024*1024):.1f} MB"
-                    # The developer's own listed website — a real, App Store-confirmed
-                    # anchor, and a far better basis for the API-domain probe below
-                    # than guessing "www.{bundle-id-segment}.com". Different apps with
-                    # different bundle IDs that happen to derive the same guessed
-                    # domain were previously returning identical results even when
-                    # they're unrelated apps (e.g. a white-label vendor's own site).
-                    seller_url = result.get("sellerUrl")
-                    if seller_url:
-                        try:
-                            host = urlparse(seller_url).hostname
-                            if host:
-                                metadata["seller_domain"] = host
-                                metadata["seller_domain_basis"] = "confirmed — App Store developer URL"
-                        except ValueError:
-                            pass
+                # The developer's own listed website — a real, App Store-confirmed
+                # anchor, and a far better basis for the API-domain probe below
+                # than guessing "www.{bundle-id-segment}.com". Different apps with
+                # different bundle IDs that happen to derive the same guessed
+                # domain were previously returning identical results even when
+                # they're unrelated apps (e.g. a white-label vendor's own site).
+                seller_url = result.get("sellerUrl")
+                if seller_url:
+                    try:
+                        host = urlparse(seller_url).hostname
+                        if host:
+                            metadata["seller_domain"] = host
+                            metadata["seller_domain_basis"] = "confirmed — App Store developer URL"
+                    except ValueError:
+                        pass
 
-                    # sellerUrl is often simply absent even for real, well-known banks
-                    # (confirmed: Punjab National Bank's own "PNB ONE" app has none).
-                    # sellerName is still real, Apple-confirmed data — check it against
-                    # the small curated list above before giving up to a bundle-ID guess.
-                    metadata["seller_name"] = result.get("sellerName")
-                    if not metadata["seller_domain"]:
-                        seller_name = (result.get("sellerName") or "").strip().lower()
-                        for bank_name, domain in KNOWN_BANK_DOMAINS.items():
-                            if bank_name in seller_name:
-                                metadata["seller_domain"] = domain
-                                metadata["seller_domain_basis"] = f'confirmed — App Store developer name matched "{bank_name.title()}"'
-                                break
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
-            log.debug("iOS store metadata fetch failed for %s: %s", app_id, e)
-    else:
-        # Android: Try Google Play Store page
+                # sellerUrl is often simply absent even for real, well-known banks
+                # (confirmed: Punjab National Bank's own "PNB ONE" app has none).
+                # sellerName is still real, Apple-confirmed data — check it against
+                # the small curated list above before giving up to a bundle-ID guess.
+                metadata["seller_name"] = result.get("sellerName")
+                if not metadata["seller_domain"]:
+                    seller_name = (result.get("sellerName") or "").strip().lower()
+                    for bank_name, domain in KNOWN_BANK_DOMAINS.items():
+                        if bank_name in seller_name:
+                            metadata["seller_domain"] = domain
+                            metadata["seller_domain_basis"] = f'confirmed — App Store developer name matched "{bank_name.title()}"'
+                            break
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        log.debug("iTunes lookup failed for %s: %s", app_id, e)
+
+    if platform != "iOS":
+        # Android: Play Store page for a more accurate Android version/size —
+        # the iTunes lookup above already covered seller_domain discovery.
         try:
             url = f"https://play.google.com/store/apps/details?id={app_id}&hl=en"
             req = urllib.request.Request(url, headers={
