@@ -210,7 +210,7 @@ const PQCSelector = () => {
                   onChange={e => setBandwidth(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#0284c7' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'rgba(0,0,0,0.3)', fontFamily: 'var(--mono)' }}>
-                  <span>1 Mbps (BSNL 2G)</span><span>300 Mbps (Jio Fiber)</span>
+                  <span>1 Mbps (low-BW mobile)</span><span>300 Mbps (fibre)</span>
                 </div>
               </div>
 

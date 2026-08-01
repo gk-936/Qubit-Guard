@@ -18,8 +18,9 @@ const Remediation = () => {
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
 
-  const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  useEffect(scrollToBottom, [messages]);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleChat = async (e) => {
     e.preventDefault();
