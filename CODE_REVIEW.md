@@ -51,6 +51,10 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🆕 | 401 interceptor reloaded on any 401 → infinite reload loop on the login page | ✅ Fixed (only reloads if the request actually carried a token) |
 | 🆕 | `reportlab`/`bcrypt` used but undeclared in `requirements.txt` | ✅ Fixed (pinned to verified-working versions) |
 | 🆕 | `/api/data/dashboard` 500s whenever a scan pillar was left unassessed | ✅ Fixed (found while re-auditing after the mobile PQC-score fix) |
+| 🆕 | `get_algorithm()` substring check backwards — PQC Selector's FIPS/OID card never rendered | ✅ Fixed |
+| 🆕 | Selector could pick an algorithm outside the requested pillar's family, contradicting its own rationale text | ✅ Fixed (pillar-consistency guard) |
+| 🆕 | "Weekly" schedule saved + showed success but registered no job — silently never ran | ✅ Fixed |
+| 🆕 | "Once" schedule used a recurring cron trigger — ran forever, not once | ✅ Fixed (`date` trigger + deactivates after firing) |
 | 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
