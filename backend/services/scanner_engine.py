@@ -534,10 +534,12 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
-        else:
-            pillar_qvs_scores.append(75)
+        # Else: genuinely nothing was measured (no TLS, no IKEv2) — this used
+        # to fabricate a QVS of 75 here, the same "unassessed treated as a
+        # real ~75/100 score" pattern _scan_web_tls was already fixed to
+        # avoid. Append nothing; avg_qvs below falls through to None.
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
     return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
@@ -556,11 +558,12 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
     """
     findings = []
     pillar_qvs_scores = []
-    
+
+    parsed = urlparse(api_url if api_url.startswith("http") else f"https://{api_url}")
+    host = parsed.hostname or api_url
+
     # 1. mTLS Detection
     try:
-        parsed = urlparse(api_url if api_url.startswith("http") else f"https://{api_url}")
-        host = parsed.hostname or api_url
         context = ssl.create_default_context()
         with socket.create_connection((host, 443), timeout=3) as sock:
             try:
@@ -579,6 +582,20 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                     })
                     pillar_qvs_scores.append(85)
     except (OSError, ssl.SSLError) as e:
+        # Genuinely could not reach the API host at all. This used to be
+        # completely silent (log.debug only) — every other pillar (Web, VPN,
+        # Firmware, Archival) reports an honest "Unreachable" finding when
+        # this happens; the API pillar just left `findings` empty with no
+        # explanation, which is why its Triad Scanner card rendered blank
+        # instead of showing an unreachable message like the others.
+        findings.append({
+            "severity": "info",
+            "issue": "API Endpoint Unreachable",
+            "detail": f"Could not establish a TCP/TLS connection to {host}:443: {e}. API cryptographic posture could not be assessed.",
+            "recommendation": "Verify the API endpoint is reachable, or provide an internal endpoint for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
         log.debug("mTLS probe failed for %s: %s", api_url, e)
 
     # 2. JWT Analysis
@@ -615,7 +632,14 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError) as e:
             log.debug("Could not parse JWT header for %s: %s", api_url, e)
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 90
+    # No fallback fabrication: a reachable API with no mTLS enforcement and
+    # no JWT supplied (JWT is optional in the UI) legitimately has nothing
+    # to flag — that's a real "nothing risky observed" result, not "score it
+    # 90 anyway". This used to always contribute a number to the pillar's
+    # QVS (and therefore to the overall average) even when nothing was ever
+    # actually measured — the same "unassessed treated as a real score"
+    # pattern already fixed in _scan_web_tls.
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
     return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
@@ -714,7 +738,8 @@ def _scan_firmware(target: str) -> dict:
             "evidence": "measured",
             "inferred_from": None,
         })
-        pillar_qvs_scores.append(75)
+        # Nothing was actually measured — used to fabricate a QVS of 75 here
+        # (same pattern already fixed in _scan_web_tls). Append nothing.
 
     if fw_endpoints:
         findings.append({
@@ -727,7 +752,7 @@ def _scan_firmware(target: str) -> dict:
         })
         pillar_qvs_scores.append(95)
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
     return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
@@ -841,7 +866,8 @@ def _scan_archival(target: str) -> dict:
             "evidence": "measured",
             "inferred_from": None,
         })
-        pillar_qvs_scores.append(75)
+        # Nothing was actually measured — used to fabricate a QVS of 75 here
+        # (same pattern already fixed in _scan_web_tls). Append nothing.
 
     for header, value in storage_headers.items():
         cloud = "AWS" if "amz" in header else "Azure" if "ms" in header else "GCP"
@@ -854,7 +880,7 @@ def _scan_archival(target: str) -> dict:
             "inferred_from": None,
         })
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
     return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
