@@ -38,8 +38,16 @@ const ApiMetrics = ({ data }) => {
         <div style={{ borderLeft: '1px solid #eee', paddingLeft: '16px' }}>
           <div style={{ fontWeight: 600, color: 'var(--pnb-red)', marginBottom: '8px', fontSize: '12px' }}>Quantum Vulnerability Status</div>
           <div style={{ height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {/* Pie Chart Placeholder */}
-            <div style={{ position: 'relative', width: '80px', height: '80px', borderRadius: '50%', background: 'conic-gradient(#C0272D 0% 84%, #1A8A1A 84% 100%)' }}></div>
+            {(() => {
+              const vuln = metrics.quantumRisk.vulnerable || 0;
+              const ready = metrics.quantumRisk.pqc_ready || 0;
+              const total = vuln + ready;
+              const vulnPct = total > 0 ? (vuln / total) * 100 : 0;
+              const bg = total > 0
+                ? `conic-gradient(#C0272D 0% ${vulnPct}%, #1A8A1A ${vulnPct}% 100%)`
+                : '#e0e0e0';
+              return <div style={{ position: 'relative', width: '80px', height: '80px', borderRadius: '50%', background: bg }}></div>;
+            })()}
           </div>
           <div style={{ marginTop: '12px', fontSize: '11px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>

@@ -18,7 +18,6 @@ const Header = ({ title, onLogout }) => {
         {isHistoryMode && activeScanMetadata && (
           <div className="history-banner" onClick={() => switchScan('')}>
             <span style={{ fontSize: '12px' }}>📅 VIEWING SCAN: <strong>{new Date(activeScanMetadata.timestamp).toLocaleDateString()}</strong></span>
-            <span style={{ opacity: 0.7 }}>By {activeScanMetadata.user}</span>
             <span className="close-banner">✖</span>
           </div>
         )}
