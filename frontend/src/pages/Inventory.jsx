@@ -160,7 +160,6 @@ const Inventory = () => {
                  <th>Asset PURL / ID</th>
                 <th>Component Name</th>
                 <th>Category</th>
-                <th>Version</th>
                 <th>Algorithm</th>
                 <th>Risk Profile</th>
                 <th>Actions</th>
@@ -178,7 +177,6 @@ const Inventory = () => {
                     )}
                   </td>
                   <td><span style={{ fontSize: '11px', background: '#f0f0f0', padding: '2px 8px', borderRadius: '4px' }}>{d.category || 'Software'}</span></td>
-                  <td>{d.version || 'N/A'}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: d.algorithm?.includes('ML-') ? 'var(--pnb-gold)' : 'var(--pnb-red)' }}>{d.algorithm}</td>
                   <td><span className={`risk-badge ${d.risk === 'Low' ? 'rb-low' : (d.risk === 'Critical' ? 'rb-critical' : 'rb-high')}`}>{d.risk}</span></td>
                    <td style={{ display: 'flex', gap: '5px' }}>
