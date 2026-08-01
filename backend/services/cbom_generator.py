@@ -34,7 +34,7 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
             components.append({
                 "type": cfg["type"],
                 "name": cfg["name"],
-                "version": "unknown",
+                "version": "Not Assessed",
                 "crypto": "Not Assessed",
                 "quantumSafe": None,
                 "properties": [
@@ -70,10 +70,25 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
         if any(classic_kw in detected_algo for classic_kw in ["Classical", "RSA", "ECC", "ECDHE", "ECDSA"]):
             is_quantum_safe = False
 
+        # Extract TLS version from findings for a meaningful version label.
+        # Findings with "TLS" in the detail or issue carry the negotiated version
+        # (e.g. "TLSv1.3", "TLSv1.2") — use that instead of the uninformative
+        # hardcoded "unknown" that was here before.
+        tls_version = None
+        for f in findings:
+            for field in (f.get("detail", ""), f.get("issue", "")):
+                m = __import__('re').search(r'TLSv?[\s]?([\d.]+)', field)
+                if m:
+                    tls_version = f"TLS {m.group(1)}"
+                    break
+            if tls_version:
+                break
+        pillar_version = tls_version or "TLS (version not extracted)"
+
         components.append({
             "type": cfg["type"],
             "name": cfg["name"],
-            "version": "unknown",
+            "version": pillar_version,
             "crypto": detected_algo,
             "quantumSafe": is_quantum_safe,
             "properties": [
@@ -141,6 +156,13 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
 
     # --- Mobile Application Ingestion ---
     if discovered_mobile_apps:
+        # Build a version lookup from iOS entries so Android (derived-from-ios)
+        # entries can reuse the same real version instead of showing "unknown".
+        ios_versions = {
+            app["id"]: app.get("version", "Unknown")
+            for app in discovered_mobile_apps
+            if app.get("platform") == "iOS" and app.get("version") not in (None, "", "Unknown")
+        }
         for app in discovered_mobile_apps:
             # App discovery (search_mobile_apps) only returns store metadata
             # (name/id/platform/status) — it carries no cryptographic evidence.
@@ -161,8 +183,12 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
                     quantum_safe = False
                     break
             if detected_algo is None:
-                detected_algo = "unknown"
+                detected_algo = "Not Assessed"
                 quantum_safe = app.get("quantumSafe")  # None if the app was never scanned
+
+            # Use the version fetched during discovery; Android entries fall back
+            # to the iOS version for the same bundle ID (same app, same release).
+            version = app.get("version") or ios_versions.get(app["id"], "Unknown")
 
             properties = [
                 {"name": "quantum-shield:asset-type", "value": f"Mobile/{app['platform']}"},
@@ -176,7 +202,7 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
             components.append({
                 "type": "application",
                 "name": f"Mobile App: {app['name']} ({app['platform']})",
-                "version": app.get("version", "unknown"),
+                "version": version,
                 "crypto": detected_algo,
                 "quantumSafe": quantum_safe,
                 "properties": properties

@@ -61,3 +61,5 @@ index (2).html
 
 # Internal audit log — not part of the shipped app, stays local
 CODE_REVIEW.md
+
+graphify-out/

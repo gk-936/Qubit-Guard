@@ -670,7 +670,7 @@ def discover_pnb_assets(target_base: str) -> dict:
 
 def fetch_mobile_apps_for_discovery(domain: str) -> list:
     """Helper to find mobile apps relevant to the domain."""
-    from services.mobile_scanner import search_mobile_apps
+    from services.mobile_scanner import search_mobile_apps, _fetch_store_metadata
     # Extract organization keyword (e.g., 'pnb' from 'www.pnb.bank.in').
     # Strip the "www" label first — scanning "www.pnb.bank.in" (a completely
     # normal way to type a target) otherwise took the FIRST label as the
@@ -679,12 +679,21 @@ def fetch_mobile_apps_for_discovery(domain: str) -> list:
     labels = [p for p in domain.lower().split('.') if p and p != "www"]
     org = labels[0] if labels else domain
     apps = search_mobile_apps(org)
-    return [
-        {
+    result = []
+    for app in apps:
+        # Fetch real version from the store so CBOM/Inventory don't show "unknown".
+        # Only fetch for iOS entries (Android entries share the same bundle ID and
+        # the iTunes lookup already covers both — avoids a duplicate network call).
+        version = "Unknown"
+        if app["platform"] == "iOS":
+            meta = _fetch_store_metadata(app["id"], "iOS")
+            version = meta.get("version", "Unknown")
+        result.append({
             "name": app["name"],
             "id": app["id"],
             "platform": app["platform"],
-            "status": app["status"]
-        }
-        for app in apps
-    ]
+            "status": app["status"],
+            "version": version,
+            "source": app.get("source"),
+        })
+    return result
