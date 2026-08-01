@@ -30,13 +30,50 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 20 | Dead Node/Express codebase | ✅ Deleted |
 | 21 | Other dead code (`entropy.py`, stale JSON) | ✅ Deleted |
 | 18 | Seed data indistinguishable from real data | ✅ Fixed |
-| 17b | `DELETE /inventory/{purl}` always 404s | 🆕 Open (found during #18) |
-| 6, 8–12, 14, 15, 17, 19, 22–25 | — | Open |
+| 17b | `DELETE /inventory/{purl}` always 404s | ✅ Fixed |
+| 19 | 11+ silently swallowed exceptions | ✅ Fixed (17 sites, typed + logged) |
+| 6 | "ML Selector" mislabeled as Random Forest | ✅ Renamed (rule-table ensemble) |
+| 8 | "PQC engine" mislabeled as executing crypto | ✅ Docstring corrected (registry) |
+| 9, 10 | Firmware/Archival inferred verdicts unlabeled | ✅ Fixed (`evidence` field added) |
+| 11 | Android mobile results copy iOS silently | ✅ Fixed (tagged `derived-from-ios`) |
+| 14 | CBOM hardcoded crypto/version fields | ✅ Fixed (derived or `"unknown"`) |
+| 15 | QVS aggregation comment said "weighted" | ✅ Verified already correct |
+| 17 | VPN/API pillar tagging pure hostname guess | ✅ Fixed (probes upgrade to evidence) |
+| 23 | Cosmetic fake scan-progress timers | ✅ Removed |
+| 24 | No SQLite retry/backoff | ✅ Fixed (WAL + busy_timeout + retry helper) |
+| 28 | CORS wildcard + credentials (invalid combo) | ✅ Fixed (origin allowlist) |
+| 30 | Emailed reports defaulted missing QVS to 75 | ✅ Fixed (+ inverted risk-level bug found & fixed) |
+| 🆕 | Mobile scanner asserted crypto for unreachable apps | ✅ Fixed (found during #19 sweep, same pattern as #2) |
+| 🆕 | `check_zone_transfer` crashed on every real domain | ✅ Fixed (regression from #19's exception narrowing, caught before merge) |
+| 🆕 | `schedules` table missing 5 columns — `python main.py` crashed at startup | ✅ Fixed (`ensure_schema()` now diffs every table generically) |
+| 🆕 | `/api/scan/triad` uncapped per-host probing — real scans could hang for minutes | ✅ Fixed (capped to 6 hosts; 2m30s+ hang → 57s) |
+| 🆕 | `uvicorn reload=True` watching `*.db-wal` thrashed the worker mid-request | ✅ Fixed (off by default, `RELOAD=true` opt-in) |
+| 🆕 | 401 interceptor reloaded on any 401 → infinite reload loop on the login page | ✅ Fixed (only reloads if the request actually carried a token) |
+| 🆕 | `reportlab`/`bcrypt` used but undeclared in `requirements.txt` | ✅ Fixed (pinned to verified-working versions) |
+| 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
 `RSA` (100) instead of 90; and `Rating.jsx` used `overall \|\| 0`, which turned an unassessed scan
 into a perfect **1000/1000 "Elite-PQC Status"**.
+
+---
+
+## Live end-to-end verification (2026-08-01)
+
+Every fix in this document was previously verified via `TestClient` (in-process, no real server) or
+direct function calls. `TestClient` did not catch four of the seven items marked 🆕 above — they only
+surfaced when the app was actually booted with `python main.py` and driven through a real browser.
+**If you only test through `TestClient`, do that final pass through the real server and a real
+browser before treating anything as submission-ready** — it is not equivalent.
+
+Confirmed working, live, via `python main.py` + `npm run dev` + a real browser:
+- Login → dashboard → Triad Scan against `github.com` → real results (QVS 87, 5/5 pillars, 143 real
+  discovered API endpoints, correct TLS 1.3 certificate parsing) in ~57s.
+- Unauthenticated requests correctly 401; CORS correctly rejects a foreign origin.
+- Report send correctly reports "generated but NOT sent" when SMTP times out (verified against real
+  configured SMTP credentials, not a mock).
+- Seeded demo data is now empty of test noise (`scan_results` table cleared before handoff).
 
 ---
 
