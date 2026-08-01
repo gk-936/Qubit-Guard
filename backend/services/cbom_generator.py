@@ -20,17 +20,50 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
     for pillar, findings in scan_findings.items():
         if pillar not in pillar_map:
             continue
-            
+
         cfg = pillar_map[pillar]
-        # Determine if quantum safe: check for critical/high issues
+
+        if not findings:
+            # A pillar with no findings was never actually assessed — e.g. the API
+            # pillar produces nothing when no JWT token is supplied (it's optional
+            # in the UI) and mTLS isn't strictly enforced. This used to default to
+            # "Classical (RSA/ECC)" / quantumSafe: False regardless — a fabricated
+            # verdict for a target that was never probed for crypto in this scan.
+            # Matches the "N/A"/not-assessed convention used everywhere else
+            # (scanner_engine.py's qvs: None, the frontend's N/A rendering).
+            components.append({
+                "type": cfg["type"],
+                "name": cfg["name"],
+                "version": "unknown",
+                "crypto": "Not Assessed",
+                "quantumSafe": None,
+                "properties": [
+                    {"name": "qubit-guard:asset-type", "value": cfg["asset"]},
+                    {"name": "qubit-guard:crypto-algorithm", "value": "Not Assessed"},
+                    {"name": "qubit-guard:quantum-safe", "value": "unknown"},
+                    {"name": "qubit-guard:detected-at", "value": datetime.utcnow().isoformat()},
+                ]
+            })
+            continue
+
         has_vulnerabilities = any(f["severity"] in ["critical", "high"] for f in findings)
-        
-        # Try to extract the detected algorithm from findings
-        detected_algo = "Classical (RSA/ECC)"
-        for f in findings:
-            if "Algorithm" in f["issue"] or "Key Exchange" in f["issue"]:
-                detected_algo = f["issue"].split(":")[-1].strip()
-                break
+
+        # Extract the detected algorithm from findings. Check every finding rather
+        # than stopping at the first match, and prefer critical/high-severity
+        # matches over an "info" one — the original version broke on the first
+        # finding containing "Algorithm" or "Key Exchange" regardless of severity
+        # or specificity, so e.g. a web scan with both a "Quantum-Vulnerable Key
+        # Exchange: ECDHE" finding AND a "Quantum-Vulnerable Certificate Key:
+        # ECDSA-256" finding only ever reported "ECDHE", silently dropping the
+        # certificate's own signature algorithm. "Certificate Key" and "Signing"
+        # are also matched now — findings using that phrasing (certificate keys,
+        # firmware signing) weren't matching "Algorithm"/"Key Exchange" at all and
+        # fell straight through to the generic default.
+        algo_keywords = ["Algorithm", "Key Exchange", "Certificate Key", "Signing"]
+        candidates = [f for f in findings if any(kw in f["issue"] for kw in algo_keywords)]
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        candidates.sort(key=lambda f: severity_rank.get(f["severity"], 5))
+        detected_algo = candidates[0]["issue"].split(":")[-1].strip() if candidates else "Unknown"
 
         # A target is NOT quantum safe if vulnerabilities were found OR if it resolved to classical cryptography
         is_quantum_safe = not has_vulnerabilities

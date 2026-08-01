@@ -70,7 +70,12 @@ def generate_professional_pdf(report_type: str, scan_data: dict, db: Session = N
     
     # Fetch real data from database if available
     cbom_items = []
-    risk_scores = scan_data.get("riskScores", {"overall": 75, "web": 80, "api": 70, "iot": 85})
+    # An empty dict, not a fabricated one: risk_scores.get("overall") must return
+    # None (not a plausible-looking fake 75) when riskScores is genuinely absent,
+    # so the "Not Assessed" rendering below (_qvs_text) actually applies. This
+    # exact fallback used to inject {"overall": 75, "web": 80, "api": 70, "iot": 85}
+    # — real numbers, not None — which silently bypassed that honesty check.
+    risk_scores = scan_data.get("riskScores") or {}
     findings = scan_data.get("findings", {})
     
     if db:
@@ -195,15 +200,20 @@ def _extract_bank_name(url: str) -> str:
 def _generate_executive_report(risk_scores: dict, findings: dict, components: list, timestamp: datetime, bank_name: str = "Organization", **kwargs) -> str:
     """Executive Summary: High-level risk posture and recommendations."""
     
+    # The real pillars this app scans are web/vpn/api/firmware/archival — there is
+    # no "iot" pillar anywhere in the scan engine, so risk_scores.get("iot") always
+    # returned None and this section permanently showed "IoT/Embedded Systems QVS:
+    # Not Assessed" on every single report, while the VPN pillar — a real,
+    # genuinely-scanned pillar — was silently missing from this summary entirely.
     overall_qvs = risk_scores.get("overall")
     web_qvs = risk_scores.get("web")
     api_qvs = risk_scores.get("api")
-    iot_qvs = risk_scores.get("iot")
+    vpn_qvs = risk_scores.get("vpn")
 
     overall_txt = _qvs_text(overall_qvs)
     web_txt = _qvs_text(web_qvs)
     api_txt = _qvs_text(api_qvs)
-    iot_txt = _qvs_text(iot_qvs)
+    vpn_txt = _qvs_text(vpn_qvs)
     readiness_txt = _inverse_pct_text(overall_qvs)
     gap_txt = _qvs_text(overall_qvs, "%")
 
@@ -266,7 +276,7 @@ RISK CLASSIFICATION: {risk_level}
 KEY METRICS:
 ├─ Web/TLS Infrastructure QVS:    {web_txt}
 ├─ API Gateway Infrastructure QVS: {api_txt}
-├─ IoT/Embedded Systems QVS:      {iot_txt}
+├─ VPN Gateway Infrastructure QVS: {vpn_txt}
 └─ FIPS 203/204 Readiness:        {readiness_txt} TRANSITION REQUIRED
 
 SCANNED ENDPOINTS:
@@ -339,8 +349,11 @@ Findings: {len(web_findings)} issues detected
                 risk = "Medium"
             content += f"\n{i}. {issue} [{risk}]"
     else:
-        content += "\n• No critical findings detected"
-    
+        # An empty findings list is not the same as "confirmed secure" — it can
+        # also mean the pillar was never reached or never assessed. Neutral
+        # wording, not an affirmative clean bill of health that wasn't earned.
+        content += "\n• No findings recorded for this pillar"
+
     content += f"""
 
 API GATEWAY SCAN RESULTS
@@ -359,7 +372,10 @@ Findings: {len(api_findings)} issues detected
                 issue = "Requires review"
             content += f"\n{i}. {endpoint}: {issue}"
     else:
-        content += "\n• No critical API vulnerabilities found"
+        # Confirmed reachable live: the API pillar produces zero findings when no
+        # JWT token is supplied (it's optional) and mTLS isn't strictly enforced —
+        # "not tested", not "tested and clean". This previously claimed the latter.
+        content += "\n• No findings recorded — the API pillar may not have been assessed (e.g. no JWT token was supplied)"
     
     content += f"""
 
@@ -379,7 +395,10 @@ Findings: {len(vpn_findings)} issues detected
                 issue = "Review required"
             content += f"\n{i}. {protocol}: {issue}"
     else:
-        content += "\n• VPN encryption meets baseline standards"
+        # Was an unconditional positive security claim ("meets baseline standards")
+        # asserted purely from an empty findings list — no verification the VPN
+        # gateway was ever actually reached. Neutral wording instead.
+        content += "\n• No findings recorded for this pillar"
     
     content += f"""
 
