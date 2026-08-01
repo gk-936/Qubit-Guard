@@ -19,6 +19,7 @@ Output: Algorithm selection with Selector_Log.
 """
 
 from datetime import datetime
+from typing import Optional
 
 
 # ── Decision Table ────────────────────────────────────────────────────────────
@@ -362,6 +363,29 @@ class _RuleTreeEnsemble:
 _model = _RuleTreeEnsemble(n_trees=3, max_depth=6)
 _model.fit(RULE_TABLE, n_features=6)
 
+# Which label(s) are actually valid for each pillar, derived from the rule
+# table itself. The tree's splits are learned over all 6 features jointly, so
+# an input combination the training rows never pair with that pillar (e.g.
+# pillar=Mobile with the UI's Server/1yr defaults, when every Mobile row in
+# RULE_TABLE has device=Mobile) can land on a leaf from a different pillar's
+# branch entirely — e.g. predicting ML-DSA-65 for "Mobile", while the
+# rationale text below is keyed on pillar and still describes FN-DSA. Used as
+# a consistency guard so the returned algorithm and its rationale can never
+# describe two different algorithm families.
+_PILLAR_LABELS: dict[int, list[int]] = {}
+for _row in RULE_TABLE:
+    _PILLAR_LABELS.setdefault(_row[0], []).append(_row[-1])
+
+
+def _majority_label_for_pillar(pillar_idx: int) -> Optional[int]:
+    labels = _PILLAR_LABELS.get(pillar_idx)
+    if not labels:
+        return None
+    counts: dict[int, int] = {}
+    for l in labels:
+        counts[l] = counts.get(l, 0) + 1
+    return max(counts, key=counts.get)
+
 
 # ── Feature Descriptions (for Selector_Log) ──────────────────────────────────
 
@@ -399,6 +423,17 @@ def select_algorithm(
     features = [pillar_idx, bandwidth_kbps, latency_ms, device_idx, retention_years, compliance_idx]
 
     label_idx, confidence = _model.predict(features)
+
+    # Consistency guard: the rationale text below is keyed purely on pillar_idx,
+    # so if the ensemble's vote landed on a label that RULE_TABLE never actually
+    # pairs with this pillar, fall back to this pillar's majority label rather
+    # than return an algorithm whose family contradicts its own rationale.
+    valid_labels = _PILLAR_LABELS.get(pillar_idx)
+    if valid_labels and label_idx not in valid_labels:
+        fallback = _majority_label_for_pillar(pillar_idx)
+        if fallback is not None:
+            label_idx = fallback
+            confidence = round(_PILLAR_LABELS[pillar_idx].count(fallback) / len(_PILLAR_LABELS[pillar_idx]), 2)
     algorithm = ALGO_LABELS[label_idx]
 
     # Parse algorithm into family + parameter set
