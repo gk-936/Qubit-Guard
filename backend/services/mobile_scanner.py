@@ -34,24 +34,37 @@ def search_mobile_apps(query: str = "") -> list:
             for item in data.get("results", []):
                 app_name = item.get("trackName", "")
                 bundle_id = item.get("bundleId", "")
-                
-                # Heuristic to filter for "Official" vs "Third-party"
-                # In a real scenario, we'd have a whitelist of developer IDs
-                status = "Official" if query.lower() in app_name.lower() or query.lower() in bundle_id.lower() else "Verified"
-                
+
+                # Heuristic classification, not a verified developer identity check —
+                # there is no whitelist of PNB's actual developer IDs to match against.
+                # "Official" only means the search term appears in the name/bundle ID.
+                name_match = query.lower() in app_name.lower() or query.lower() in bundle_id.lower()
+                status = "Official" if name_match else "Verified"
+                status_basis = (
+                    f'App name or bundle ID contains the search term "{query}".'
+                    if name_match else
+                    f'Returned by an App Store search for "{query}"; name/bundle ID did '
+                    f'not match, so this is not confirmed as the bank\'s own listing.'
+                )
+
+                # userRatingCount distinguishes "no ratings yet" from "rated 0/5" —
+                # both otherwise report averageUserRating as 0, which is misleading.
+                rating_count = item.get("userRatingCount", 0)
+                rating = item.get("averageUserRating") if rating_count > 0 else None
+
                 results.append({
                     "id": bundle_id,
                     "name": app_name,
                     "platform": "iOS",
                     "status": status,
-                    "rating": item.get("averageUserRating", 0),
+                    "status_basis": status_basis,
+                    "rating": rating,
+                    "rating_count": rating_count,
                     "developer": item.get("artistName", "Unknown"),
                     "source": "itunes-search",
                 })
-    except Exception as e:
-        print(f"[DISCOVERY] iTunes search failed: {e}")
-        # Fallback to a minimal set if API is down, but marked as offline
-        pass
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        log.debug("iTunes search failed for %r: %s", query, e)
 
     # Android: There is no free official Play Store search API, so real Android
     # discovery is not available here. Rather than fabricate independent Android
@@ -65,7 +78,9 @@ def search_mobile_apps(query: str = "") -> list:
             "name": app["name"],
             "platform": "Android",
             "status": app["status"],
+            "status_basis": app["status_basis"],
             "rating": app["rating"],
+            "rating_count": app["rating_count"],
             "developer": app["developer"],
             "source": "derived-from-ios",
             "note": "Android listing inferred from the verified iOS App Store entry; not independently confirmed via Play Store.",
