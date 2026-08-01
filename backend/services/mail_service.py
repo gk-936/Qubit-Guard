@@ -70,7 +70,12 @@ def generate_professional_pdf(report_type: str, scan_data: dict, db: Session = N
     
     # Fetch real data from database if available
     cbom_items = []
-    risk_scores = scan_data.get("riskScores", {"overall": 75, "web": 80, "api": 70, "iot": 85})
+    # An empty dict, not a fabricated one: risk_scores.get("overall") must return
+    # None (not a plausible-looking fake 75) when riskScores is genuinely absent,
+    # so the "Not Assessed" rendering below (_qvs_text) actually applies. This
+    # exact fallback used to inject {"overall": 75, "web": 80, "api": 70, "iot": 85}
+    # — real numbers, not None — which silently bypassed that honesty check.
+    risk_scores = scan_data.get("riskScores") or {}
     findings = scan_data.get("findings", {})
     
     if db:
@@ -139,62 +144,76 @@ def _extract_bank_name(url: str) -> str:
     """Extract bank name from URL, ignoring test/staging subdomains."""
     if not url:
         return "Organization"
-    
-    # Common bank domain patterns
+
+    # Common bank domain patterns. Matched against the DOMAIN only (see below),
+    # never the raw URL string — matching the full URL let query strings and
+    # paths trigger false positives (e.g. "?ref=yesbank-promo" on an unrelated
+    # site). "yes" was also narrowed to "yesbank": as a bare 3-letter pattern
+    # it matched inside ordinary English substrings — confirmed false positives
+    # on "eyestest.com" and "myeservices.co.in", both reported as "YES Bank".
     bank_patterns = {
         "pnb": "Punjab National Bank",
         "manipur": "Manipur Bank",
         "manipurbank": "Manipur Bank",
-        "boi": "Bank of India",
-        "bob": "Bank of Baroda",
+        "bankofindia": "Bank of India",
+        "bankofbaroda": "Bank of Baroda",
         "sbi": "State Bank of India",
         "hdfc": "HDFC Bank",
         "icici": "ICICI Bank",
         "axis": "Axis Bank",
         "kotak": "Kotak Mahindra Bank",
-        "yes": "YES Bank",
+        "yesbank": "YES Bank",
     }
-    
+
     # Subdomains to skip (test, staging, dev, etc.)
     skip_subdomains = ["test", "staging", "dev", "demo", "sandbox", "qa", "uat"]
-    
-    url_lower = url.lower()
-    for pattern, bank_name in bank_patterns.items():
-        if pattern in url_lower:
-            return bank_name
-    
-    # Extract domain name carefully, ignoring test/staging subdomains
+
+    # Extract the domain first — every match below is checked against this,
+    # never the full URL (scheme/path/query), which is where the false
+    # positives above came from.
     try:
         from urllib.parse import urlparse
         domain = urlparse(url).netloc or url
         domain = domain.replace("www.", "")
         parts = domain.split(".")
-        
-        # Skip test/staging prefix subdomains
-        for i, part in enumerate(parts[:-2]):  # Check all parts except TLD and main domain
-            if part in skip_subdomains and i + 1 < len(parts):
-                # Use the next part as the domain name
-                return parts[i + 1].title() + " Bank"
-        
-        # Use first part if no skip pattern found
-        return parts[0].title() + " Bank"
     except (IndexError, AttributeError, ValueError) as e:
         log.warning("Failed to derive bank name from URL %r: %s", url, e, exc_info=True)
         return "Organization"
+
+    domain_lower = domain.lower()
+    # Longest pattern first so a more specific match always wins over a
+    # shorter one that happens to be its prefix/substring.
+    for pattern in sorted(bank_patterns, key=len, reverse=True):
+        if pattern in domain_lower:
+            return bank_patterns[pattern]
+
+    # No known bank matched — fall back to the domain's own label, ignoring
+    # test/staging prefix subdomains.
+    for i, part in enumerate(parts[:-2]):  # Check all parts except TLD and main domain
+        if part in skip_subdomains and i + 1 < len(parts):
+            # Use the next part as the domain name
+            return parts[i + 1].title() + " Bank"
+
+    return parts[0].title() + " Bank" if parts and parts[0] else "Organization"
 
 
 def _generate_executive_report(risk_scores: dict, findings: dict, components: list, timestamp: datetime, bank_name: str = "Organization", **kwargs) -> str:
     """Executive Summary: High-level risk posture and recommendations."""
     
+    # The real pillars this app scans are web/vpn/api/firmware/archival — there is
+    # no "iot" pillar anywhere in the scan engine, so risk_scores.get("iot") always
+    # returned None and this section permanently showed "IoT/Embedded Systems QVS:
+    # Not Assessed" on every single report, while the VPN pillar — a real,
+    # genuinely-scanned pillar — was silently missing from this summary entirely.
     overall_qvs = risk_scores.get("overall")
     web_qvs = risk_scores.get("web")
     api_qvs = risk_scores.get("api")
-    iot_qvs = risk_scores.get("iot")
+    vpn_qvs = risk_scores.get("vpn")
 
     overall_txt = _qvs_text(overall_qvs)
     web_txt = _qvs_text(web_qvs)
     api_txt = _qvs_text(api_qvs)
-    iot_txt = _qvs_text(iot_qvs)
+    vpn_txt = _qvs_text(vpn_qvs)
     readiness_txt = _inverse_pct_text(overall_qvs)
     gap_txt = _qvs_text(overall_qvs, "%")
 
@@ -257,7 +276,7 @@ RISK CLASSIFICATION: {risk_level}
 KEY METRICS:
 ├─ Web/TLS Infrastructure QVS:    {web_txt}
 ├─ API Gateway Infrastructure QVS: {api_txt}
-├─ IoT/Embedded Systems QVS:      {iot_txt}
+├─ VPN Gateway Infrastructure QVS: {vpn_txt}
 └─ FIPS 203/204 Readiness:        {readiness_txt} TRANSITION REQUIRED
 
 SCANNED ENDPOINTS:
@@ -330,8 +349,11 @@ Findings: {len(web_findings)} issues detected
                 risk = "Medium"
             content += f"\n{i}. {issue} [{risk}]"
     else:
-        content += "\n• No critical findings detected"
-    
+        # An empty findings list is not the same as "confirmed secure" — it can
+        # also mean the pillar was never reached or never assessed. Neutral
+        # wording, not an affirmative clean bill of health that wasn't earned.
+        content += "\n• No findings recorded for this pillar"
+
     content += f"""
 
 API GATEWAY SCAN RESULTS
@@ -350,7 +372,10 @@ Findings: {len(api_findings)} issues detected
                 issue = "Requires review"
             content += f"\n{i}. {endpoint}: {issue}"
     else:
-        content += "\n• No critical API vulnerabilities found"
+        # Confirmed reachable live: the API pillar produces zero findings when no
+        # JWT token is supplied (it's optional) and mTLS isn't strictly enforced —
+        # "not tested", not "tested and clean". This previously claimed the latter.
+        content += "\n• No findings recorded — the API pillar may not have been assessed (e.g. no JWT token was supplied)"
     
     content += f"""
 
@@ -370,7 +395,10 @@ Findings: {len(vpn_findings)} issues detected
                 issue = "Review required"
             content += f"\n{i}. {protocol}: {issue}"
     else:
-        content += "\n• VPN encryption meets baseline standards"
+        # Was an unconditional positive security claim ("meets baseline standards")
+        # asserted purely from an empty findings list — no verification the VPN
+        # gateway was ever actually reached. Neutral wording instead.
+        content += "\n• No findings recorded for this pillar"
     
     content += f"""
 

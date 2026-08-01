@@ -2,6 +2,19 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
 
+// Every quantum-safe algorithm was being labelled "FIPS 203" regardless of which
+// one it actually was — a ML-DSA signature is FIPS 204, SLH-DSA is FIPS 205, and
+// XMSS/LMS/FN-DSA/BIKE/HQC aren't FIPS at all yet. Derive the real standard from
+// the algorithm name instead of a fixed label.
+const nistStandard = (algorithm) => {
+  const a = (algorithm || '').toUpperCase();
+  if (a.includes('ML-KEM') || a.includes('KYBER')) return 'FIPS 203';
+  if (a.includes('ML-DSA') || a.includes('DILITHIUM')) return 'FIPS 204';
+  if (a.includes('SLH-DSA') || a.includes('SPHINCS')) return 'FIPS 205';
+  if (a.includes('XMSS') || a.includes('LMS')) return 'SP 800-208';
+  return 'PQC (Draft)'; // FN-DSA/Falcon, BIKE, HQC — not yet finalized as a FIPS
+};
+
 const Posture = () => {
   const navigate = useNavigate();
   const { activeData } = useScan();
@@ -76,7 +89,7 @@ const Posture = () => {
                     {item.risk}
                   </span>
                 </td>
-                <td>{item.quantumSafe ? '✅ FIPS 203' : '❌ VULNERABLE'}</td>
+                <td>{item.quantumSafe ? `✅ ${nistStandard(item.algorithm)}` : '❌ VULNERABLE'}</td>
               </tr>
             ))}
             {(!activeData || !activeData.cbom?.components?.length) && (

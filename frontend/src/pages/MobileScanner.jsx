@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { searchMobileApps, scanMobileApp as apiScanApp } from '../api';
 import { useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
+import { useToast } from '../context/ToastContext';
 
 const MobileScanner = () => {
   const { activeScanId, activeScanMetadata } = useScan();
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const [apps, setApps] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -36,6 +38,7 @@ const MobileScanner = () => {
       }
     } catch (err) {
       console.error('Search Failed:', err);
+      showToast('App search failed. Check your connection and try again.', 'error');
     } finally {
       setIsSearching(false);
     }
@@ -45,14 +48,23 @@ const MobileScanner = () => {
     setSelectedApp(app);
     setIsScanning(true);
     setScanResult(null);
-    
+
     try {
       const response = await apiScanApp({ appId: app.id, platform: app.platform });
       if (response.data.success) {
         setScanResult(response.data.results);
+      } else {
+        showToast('Scan did not complete. Please try again.', 'error');
       }
     } catch (err) {
       console.error('Mobile Scan Failed:', err);
+      // Surface the failure instead of leaving a silent, empty panel — a session
+      // timeout (401) or a network hiccup would otherwise look like a dead button.
+      const status = err.response?.status;
+      const message = status === 401
+        ? 'Your session has expired. Please log in again.'
+        : 'Scan failed — could not reach the scanning engine. Check your connection and try again.';
+      showToast(message, 'error');
     } finally {
       setIsScanning(false);
     }
@@ -77,6 +89,7 @@ const MobileScanner = () => {
             <thead>
               <tr>
                 <th>App Name</th>
+                <th>Developer</th>
                 <th>Platform</th>
                 <th>Package ID / SKU</th>
                 <th>Store Status</th>
@@ -95,12 +108,43 @@ const MobileScanner = () => {
                       </div>
                     )}
                   </td>
+                  <td style={{
+                    fontSize: '12px',
+                    // A search for a common bank abbreviation (e.g. "PNB") can also match
+                    // completely unrelated banks worldwide that share it — this is the
+                    // strongest signal for telling them apart, so a developer name that
+                    // doesn't contain the search term at all is flagged for a second look.
+                    color: app.developer && searchQuery && !app.developer.toLowerCase().includes(searchQuery.toLowerCase())
+                      ? '#a66a00' : '#333',
+                    fontWeight: app.developer && searchQuery && !app.developer.toLowerCase().includes(searchQuery.toLowerCase())
+                      ? 600 : 400,
+                  }}>
+                    {app.developer || 'Unknown'}
+                  </td>
                   <td style={{ color: app.platform === 'Android' ? '#A4C639' : '#555' }}>
                     {app.platform === 'Android' ? '🤖 Android' : '🍏 iOS'}
                   </td>
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{app.id}</td>
-                  <td><span className="risk-badge rb-low">{app.status}</span></td>
-                  <td>⭐ {app.rating}</td>
+                  <td>
+                    <span className="risk-badge rb-low">{app.status}</span>
+                    {app.status_basis && (
+                      <div style={{ fontSize: '10px', fontWeight: 500, color: '#888', marginTop: '2px', maxWidth: '220px' }}>
+                        {app.status_basis}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {app.rating === null || app.rating === undefined ? (
+                      <span style={{ color: '#888' }}>No ratings yet</span>
+                    ) : (
+                      <>
+                        ⭐ {app.rating.toFixed(2)}
+                        <div style={{ fontSize: '10px', fontWeight: 500, color: '#888' }}>
+                          from {app.rating_count?.toLocaleString() || 0} rating{app.rating_count === 1 ? '' : 's'}
+                        </div>
+                      </>
+                    )}
+                  </td>
                   <td>
                     <button className="btn btn-gold btn-sm" onClick={() => runMobileScan(app)}>⚡ Scan App</button>
                   </td>

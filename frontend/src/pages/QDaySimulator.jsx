@@ -8,23 +8,37 @@ const QDaySimulator = () => {
   const [progress, setProgress] = useState({ harvest: 0, qday: 0, decrypt: 0 });
   const [status, setStatus] = useState('Standby');
   const [tte, setTte] = useState(null); // Time To Exposure (years)
+  const [tteLoading, setTteLoading] = useState(true);
   const [vulnCount, setVulnCount] = useState(0);
   const navigate = useNavigate();
 
   const fetchStats = async () => {
+    setTteLoading(true);
     try {
       const res = await getDashboardData();
       if (res.data.success) {
         const count = parseInt(res.data.data.summary.cbomVulnerabilities.value.replace(/,/g, ''));
         setVulnCount(count);
-        
-        // PQC Sensitivity Model:
-        const postureScore = res.data.data.posture.legacyRemoval || 85;
+
+        // Illustrative sensitivity model — arbitrary constants chosen to produce a
+        // plausible-looking range, not derived from any published quantum-hardware
+        // timeline. Do not present this as a rigorous forecast (see copy below).
+        const legacyRemoval = res.data.data.posture.legacyRemoval;
+        // 0 is a legitimate real value ("nothing migrated yet") — `|| 85` would have
+        // silently replaced it with the fallback constant, same as any other falsy-0 bug.
+        const postureScore = (legacyRemoval === null || legacyRemoval === undefined) ? 85 : legacyRemoval;
         const calculatedTte = (12 - (postureScore / 10) - (count / 5000)).toFixed(1);
         setTte(Math.max(2.1, calculatedTte));
+      } else {
+        setTte(null);
       }
     } catch (e) {
-      setTte(7.5);
+      console.error('Failed to load Q-Day stats:', e);
+      // A fixed fallback number here would be indistinguishable from a real
+      // calculation — null renders as an honest "couldn't load" state instead.
+      setTte(null);
+    } finally {
+      setTteLoading(false);
     }
   };
 
@@ -59,7 +73,9 @@ const QDaySimulator = () => {
         <div className="card-title" style={{ color: '#C0272D', marginBottom: '24px' }}>☢️ HNDL Threat Simulator & Exposure Model</div>
         <div style={{ display: 'flex', gap: '20px', marginBottom: '30px', flexWrap: 'wrap' }}>
             <div className="stat-chip danger" style={{ flex: 1, minWidth: '200px' }}>
-                <div className="sc-val" style={{ color: '#C0272D' }}>{tte || 'Calculating...'} Years</div>
+                <div className="sc-val" style={{ color: '#C0272D' }}>
+                  {tteLoading ? 'Calculating...' : (tte === null ? 'Not available' : `${tte} Years`)}
+                </div>
                 <div className="sc-lbl">Est. Time to Exposure (TTE)</div>
             </div>
             <div className="stat-chip info" style={{ flex: 1, minWidth: '200px' }}>
@@ -68,7 +84,7 @@ const QDaySimulator = () => {
             </div>
         </div>
         <p style={{ fontSize: '14px', color: '#7A5A30', marginBottom: '30px', lineHeight: '1.8', background: '#FFF3D4', padding: '16px', borderRadius: '8px', borderLeft: '4px solid #C0272D' }}>
-            PNB's current "Cyber Posture" suggests a <b style={{ color: '#C0272D' }}>Harvest-Now-Decrypt-Later</b> exposure horizon of <b style={{ color: '#C0272D' }}>{tte} years</b>. 
+            PNB's current "Cyber Posture" suggests a <b style={{ color: '#C0272D' }}>Harvest-Now-Decrypt-Later</b> exposure horizon of <b style={{ color: '#C0272D' }}>{tteLoading ? 'an unknown number of' : (tte === null ? 'an unknown number of' : tte)} years</b>.
             Cryptographic assets identified in the inventory are being stored by adversaries for retroactive decryption once a CRQC is realized.
         </p>
         
@@ -123,7 +139,7 @@ const QDaySimulator = () => {
               </div>
               <div style={{ marginBottom: '14px', padding: '12px', background: 'rgba(200, 134, 10, 0.05)', borderRadius: '8px', borderLeft: '3px solid #C8860A' }}>
                 <b style={{ color: '#C8860A' }}>⬡ TTE (Time to Exposure):</b>
-                <p style={{ margin: '4px 0 0 0', opacity: 0.85 }}>A predictive window ($Y$) based on PNB's total vulnerable data points and current NIST hardware projections.</p>
+                <p style={{ margin: '4px 0 0 0', opacity: 0.85 }}>An illustrative estimate scaled from the number of vulnerable data points and PQC migration progress — not a forecast derived from published quantum-hardware timelines.</p>
               </div>
               <div style={{ marginBottom: '14px', padding: '12px', background: 'rgba(107, 77, 156, 0.05)', borderRadius: '8px', borderLeft: '3px solid #6B4D9C' }}>
                 <b style={{ color: '#6B4D9C' }}>⬡ Strategic Goal:</b>

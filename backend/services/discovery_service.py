@@ -34,8 +34,10 @@ COMMON_SUBDOMAINS = [
     "media", "db", "database", "sql", "redis", "elastic", "cloud", "aws", 
     "azure", "gcp", "iot", "edge", "proxy", "lb", "balancer",
     # Banking Specific (Added for higher discovery depth)
-    "netbanking", "online", "pib", "mbs", "corp", "ebank", "payment", "card", 
+    "netbanking", "online", "pib", "mbs", "corp", "ebank", "payment", "card",
     "loan", "mortgage", "invest", "wealth", "trade", "b2b", "swift", "rtgs",
+    "ibanking", "internetbanking", "upi", "netbank", "neft", "imps", "kyc",
+    "atm", "branch", "digital", "wallet", "recharge", "insurance",
     # Business & Apps
     "shop", "blog", "news", "support", "help", "docs", "kb", "wiki", "remote",
     "desktop", "meet", "chat", "office", "hr", "admin", "manage", "billing"
@@ -168,7 +170,16 @@ def probe_host(host: str, base_domain: str) -> dict:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE  # Discovery mode: accept all certs to extract data
         
-        with socket.create_connection((host, 443), timeout=1) as sock:
+        # This is the probe that gates whether a candidate is counted as "found" at
+        # all. Was 1s originally (too tight under 30-way concurrent load — a full
+        # TCP+TLS handshake needs multiple round trips — and was very likely
+        # undercounting real, live subdomains), then 4s (still short of what the
+        # Triad Scanner itself uses for the identical operation). Now actually
+        # matches that 8s, rather than just approximating it, on the theory that
+        # under-discovering real assets is a worse failure mode here than a
+        # slightly longer scan — a candidate that resolves in DNS but is slow to
+        # complete a handshake under concurrent load is still a real asset.
+        with socket.create_connection((host, 443), timeout=8) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
@@ -195,7 +206,7 @@ def probe_host(host: str, base_domain: str) -> dict:
                 try:
                     # Capture Server Banner and Security Headers
                     req = urllib.request.Request(f"https://{host}", method="HEAD", headers={'User-Agent': 'QuantumShield-Audit/1.0'})
-                    with urllib.request.urlopen(req, timeout=1) as resp:
+                    with urllib.request.urlopen(req, timeout=3) as resp:
                         headers = resp.headers
                         asset_info["details"]["server_banner"] = headers.get('Server', 'Unknown')
                         
@@ -358,8 +369,13 @@ def discover_pnb_assets(target_base: str) -> dict:
 def fetch_mobile_apps_for_discovery(domain: str) -> list:
     """Helper to find mobile apps relevant to the domain."""
     from services.mobile_scanner import search_mobile_apps
-    # Extract organization keyword (e.g., 'pnb' from 'pnb.bank.in')
-    org = domain.split('.')[0]
+    # Extract organization keyword (e.g., 'pnb' from 'www.pnb.bank.in').
+    # Strip the "www" label first — scanning "www.pnb.bank.in" (a completely
+    # normal way to type a target) otherwise took the FIRST label as the
+    # organization keyword and searched the App Store for "www" itself,
+    # returning unrelated apps (confirmed: returned WWE wrestling games).
+    labels = [p for p in domain.lower().split('.') if p and p != "www"]
+    org = labels[0] if labels else domain
     apps = search_mobile_apps(org)
     return [
         {
