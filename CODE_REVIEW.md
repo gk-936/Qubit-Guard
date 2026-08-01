@@ -70,6 +70,8 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🟢 | Android Play Store version metadata missing for most apps | **Corrected finding, not fixed** — see below; root cause isn't a regex bug and isn't reliably fixable without JS execution or a paid API |
 | 🆕 | Discovery relied on wordlist probing alone beyond CT/AXFR; probe timeout was 8s | ✅ Enhanced — timeout reduced to 3s, added a 2nd independent CT source (Cert Spotter), DNS MX/TXT record hints, and reverse-DNS on discovered IPs (verified live: 16 real hosts found by reverse-DNS alone that no other method surfaced) |
 | 🆕 | Further discovery methods requested | ✅ Added same-domain nameserver harvesting, sitemap.xml parsing, Wayback Machine history lookup (verified live against `pnb.bank.in`: found `ns1-ns4.pnb.bank.in` — real PNB-run DNS infrastructure no other method here can see, since nameservers never serve HTTPS/TLS) |
+| 🆕 | Posture page's crypto inventory table read raw CBOM field names (`name`/`crypto`) that don't exist — every column but version/NIST-status rendered blank | ✅ Fixed (now calls the same `/api/data/cbom` transform `CBOM.jsx` already used correctly) |
+| 🆕 | `quantumSafe: None` (not assessed) collapsed into `risk: "Critical"` / "❌ VULNERABLE" in both the backend transform and two frontend pages | ✅ Fixed (explicit "Not Assessed" case, neutral badge styling, found while verifying the fix above) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
