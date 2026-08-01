@@ -56,7 +56,18 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🆕 | "Weekly" schedule saved + showed success but registered no job — silently never ran | ✅ Fixed |
 | 🆕 | "Once" schedule used a recurring cron trigger — ran forever, not once | ✅ Fixed (`date` trigger + deactivates after firing) |
 | 🆕 | `POST /remediation/generate` is dead — no frontend caller | 🟢 Open (harmless, unused endpoint; `Remediation.jsx` uses `GET /data/remediation` instead) |
+| 🆕 | `ScanContext`'s history/scan-detail fetch never re-fires on a fresh login (no page reload) | ✅ Fixed (`isLoggedIn` added to the effect's dependency array) |
+| 🆕 | `Header.jsx` "By {activeScanMetadata.user}" always rendered "By undefined" — no such field exists anywhere in the pipeline | ✅ Fixed (removed) |
+| 🆕 | `ApiMetrics.jsx` "Quantum Vulnerability Status" pie chart was a hardcoded fake, disconnected from the real numbers next to it | ✅ Fixed (computed from real `quantumRisk` data) |
+| 🆕 | `audit_service.py`: `**event` unpack outside the try block, no fallback for non-serializable values | ✅ Fixed |
+| 🆕 | Login (success/failure) was never audit-logged despite the module's "non-repudiation" claim | ✅ Fixed (`LOGIN_SUCCESS`/`LOGIN_FAILURE` added) |
+| 🆕 | 13 of 14 real `json.loads(scan.*_json)` call sites unguarded against `NULL` (same class as the dashboard crash) | ✅ Fixed (`or '{}'` guard applied everywhere) |
+| 🆕 | `db.py`'s `with_retry()` existed but was wired into zero real commit call sites | ✅ Fixed (wired into scan save, scheduled-scan save, schedule create, inventory add/delete) |
+| 🆕 | `scan_id` was a bare millisecond timestamp with no collision protection on a `unique=True` column | ✅ Fixed (random suffix added; concurrent scans observed landing 1ms apart) |
+| 🆕 | `test_pqc.py` hardcoded the wrong port (5001 vs real 5006) — every request connection-refused | ✅ Fixed |
 | 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
+| 🟢 | Android Play Store version metadata missed for some apps (HTML-regex scrape gap) — cosmetic, doesn't affect PQC scoring | Open (low priority) |
+| 🟢 | Audit trail still doesn't cover report-send, schedule create/delete, or inventory delete — only login and scan start/complete | Open (login was the highest-value gap and is now closed; broader coverage is a scope decision, not a bug) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
@@ -111,6 +122,42 @@ real running server (`python main.py`), not just `TestClient` or static reading.
 - Found and fixed one Python-version bug in my own first pass at the Selector fix: `Optional[int]`
   had been written as the 3.10+ `int | None` union syntax, which would have crashed
   `ml_selector.py` on import against the deployed Python 3.9 interpreter. Caught before commit.
+
+---
+
+## Live end-to-end verification, round 3 — parallel subagent sweep (2026-08-01)
+
+Everything previously marked "not yet checked" was covered in one pass using three parallel
+subagents (two static-analysis, one live-server), each briefed on this document's established
+house style so findings could be cross-checked against it rather than re-litigated. Every finding
+below was independently re-verified by reading the actual file/running the actual endpoint before
+being fixed — the subagents' reports were treated as leads, not conclusions.
+
+**Backend hygiene** (`audit_service.py`, `models.py`/`db.py`, dev-only scripts, `test_*.py`):
+found and fixed the audit-log gaps and crash risk, the unguarded nullable-JSON reads, and the
+unwired `with_retry()` helper (see table above). Dev-only scripts (`capture_startup.py`,
+`extract_pdf.py`, `reset_pw.py`, `run_server.py`) confirmed genuinely unused by the live app —
+no action needed. `test_discovery.py`/`test_refactor.py` confirmed to still import and run
+cleanly against the current codebase.
+
+**Frontend context/components** (`ScanContext`, `ToastContext`, `Header`, `Sidebar`, `Layout`,
+`ProtectedRoute`, `ApiMetrics`, `DemoDataBanner`, `api.js`): found and fixed the stale
+history-fetch gate, the fabricated "By {user}" field, and the hardcoded pie chart (see table
+above). `api.js`, `ToastContext.jsx`, `ProtectedRoute.jsx`, `Sidebar.jsx`, `Layout.jsx`,
+`DemoDataBanner.jsx` confirmed clean.
+
+**Live server tests** (Android mobile-scan parity, concurrency stress test), run against the
+already-running server without restarting it:
+- Re-verified the Android/iOS parity fix with 4 real bank apps (HDFC, ICICI, SBI, PNB) — both
+  platforms independently resolve the same real domain and produce genuinely different
+  scores/ciphers per app (SBI's `TLS_AES_128_GCM_SHA256` vs HDFC/ICICI's 256-bit suite). PNB ONE
+  specifically re-confirmed the `KNOWN_BANK_DOMAINS` seller-name-fallback path this fix depends on.
+- Fired concurrent `POST /api/scheduler/create` (×3) and `POST /api/scan/triad` (same-target ×3,
+  different-target ×2) against real reachable domains. No "database is locked" errors, no crashes,
+  no corrupted rows in any run. Surfaced the `scan_id` collision risk documented above (two
+  concurrent scans landed 1ms apart — not an actual collision, but exposed the missing collision
+  protection that was then fixed). All synthetic scan/schedule rows created during testing were
+  deleted afterward.
 
 ---
 
