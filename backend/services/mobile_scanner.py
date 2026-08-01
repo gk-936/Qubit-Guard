@@ -13,6 +13,20 @@ import urllib.error
 from urllib.parse import urlparse
 from datetime import datetime
 
+# Reuse the same certificate-based crypto derivation and severity scoring the
+# Triad Scanner's own web pillar uses (scanner_engine.py) rather than a
+# separate, cruder scheme here. Two problems this fixes:
+#   1. Guessing the auth algorithm from the cipher suite name is wrong for
+#      TLS 1.3 (its suite names — e.g. TLS_AES_128_GCM_SHA256 — encode neither
+#      the key exchange nor the signature algorithm; that was the very first
+#      fix made in this codebase this session, for the web pillar, but mobile
+#      scanning never got it).
+#   2. `pqc_score = 100 if is_rsa else 85` is a two-valued score: every
+#      non-static-RSA cipher (i.e. almost everything, since ECDHE dominates
+#      modern TLS) collapsed onto an identical 85 regardless of what was
+#      actually observed — indistinguishable from a hardcoded constant.
+from services.scanner_engine import _derive_crypto_params, _qvs
+
 log = logging.getLogger(__name__)
 
 # Fallback anchor for when the App Store lists a real, confirmed developer name
@@ -319,6 +333,8 @@ def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis
             with context.wrap_socket(sock, server_hostname=api_domain) as tls_sock:
                 cipher = tls_sock.cipher()
                 tls_version = tls_sock.version()
+                der_cert = tls_sock.getpeercert(binary_form=True)
+                crypto = _derive_crypto_params(cipher[0] if cipher else "", tls_version, der_cert)
                 return {
                     "reachable": True,
                     "domain": api_domain,
@@ -326,6 +342,11 @@ def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis
                     "cipher_name": cipher[0] if cipher else "Unknown",
                     "cipher_bits": cipher[2] if cipher else 0,
                     "tls_version": tls_version,
+                    "key_exchange": crypto["key_exchange"],
+                    "key_exchange_group": crypto["key_exchange_group"],
+                    "auth_algo": crypto["auth_algo"],
+                    "auth_bits": crypto["auth_bits"],
+                    "auth_source": crypto["auth_source"],
                 }
     except (OSError, ssl.SSLError, ValueError) as e:
         log.debug("API TLS probe failed for %s: %s", api_domain, e)
@@ -362,6 +383,10 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
     if api_tls.get("reachable"):
         cipher_name = api_tls["cipher_name"]
         tls_version = api_tls["tls_version"]
+        key_exchange = api_tls.get("key_exchange", "Unknown")
+        auth_algo = api_tls.get("auth_algo", "Unknown")
+        auth_bits = api_tls.get("auth_bits", 0)
+        auth_label = f"{auth_algo}-{auth_bits}" if auth_bits else auth_algo
         domain_note = f" [{api_tls.get('domain_basis')}]" if api_tls.get("domain_basis") else ""
 
         pqc_detected = any(m in cipher_name.upper() for m in ["KYBER", "MLKEM", "ML-KEM", "DILITHIUM", "ML-DSA"])
@@ -376,14 +401,30 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
             results["pqc_score"] = 0
             results["quantumSafe"] = True
         else:
-            is_rsa = "RSA" in cipher_name and "ECDHE" not in cipher_name
+            # Real, differentiated scoring reusing the same QVS table the Triad
+            # Scanner uses for the web pillar — was previously a two-valued
+            # `100 if is_rsa else 85`, which meant almost every scan (anything
+            # not static-RSA key exchange, i.e. the vast majority of modern TLS)
+            # landed on an identical 85 regardless of what was actually observed.
+            # Scored on the weaker of the key exchange and the certificate's own
+            # signature algorithm, same as the web pillar — a strong key exchange
+            # doesn't make a classically-signed certificate quantum-safe either.
+            kx_qvs = _qvs(key_exchange)
+            auth_qvs = _qvs(auth_label)
+            score = max(kx_qvs, auth_qvs)
+
             results["findings"].append({
-                "severity": "critical" if is_rsa else "high",
+                "severity": "critical" if score >= 95 else "high",
                 "issue": f"Classical Crypto on App Backend: {cipher_name}",
-                "detail": f"App's probed domain ({api_tls['domain']}{domain_note}) uses {cipher_name} ({api_tls['cipher_bits']}-bit, {tls_version}). No PQC algorithms detected.",
+                "detail": (
+                    f"App's probed domain ({api_tls['domain']}{domain_note}) uses {cipher_name} "
+                    f"({api_tls['cipher_bits']}-bit, {tls_version}). Key exchange: {key_exchange}. "
+                    f"Certificate key: {auth_label} (read from {api_tls.get('auth_source', 'certificate')}). "
+                    f"No PQC algorithms detected."
+                ),
                 "recommendation": "Integrate liboqs or Bouncy Castle PQC providers. Enable hybrid X25519MLKEM768 on the API gateway.",
             })
-            results["pqc_score"] = 100 if is_rsa else 85
+            results["pqc_score"] = score
             results["quantumSafe"] = False
 
             if tls_version and tls_version < "TLSv1.3":

@@ -171,11 +171,15 @@ def probe_host(host: str, base_domain: str) -> dict:
         context.verify_mode = ssl.CERT_NONE  # Discovery mode: accept all certs to extract data
         
         # This is the probe that gates whether a candidate is counted as "found" at
-        # all — 1s was too tight under 30-way concurrent load (a full TCP+TLS
-        # handshake needs multiple round trips) and was very likely undercounting
-        # real, live subdomains rather than correctly excluding dead ones. Matches
-        # the timeout the Triad Scanner itself uses for the same operation.
-        with socket.create_connection((host, 443), timeout=4) as sock:
+        # all. Was 1s originally (too tight under 30-way concurrent load — a full
+        # TCP+TLS handshake needs multiple round trips — and was very likely
+        # undercounting real, live subdomains), then 4s (still short of what the
+        # Triad Scanner itself uses for the identical operation). Now actually
+        # matches that 8s, rather than just approximating it, on the theory that
+        # under-discovering real assets is a worse failure mode here than a
+        # slightly longer scan — a candidate that resolves in DNS but is slow to
+        # complete a handshake under concurrent load is still a real asset.
+        with socket.create_connection((host, 443), timeout=8) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
@@ -202,7 +206,7 @@ def probe_host(host: str, base_domain: str) -> dict:
                 try:
                     # Capture Server Banner and Security Headers
                     req = urllib.request.Request(f"https://{host}", method="HEAD", headers={'User-Agent': 'QuantumShield-Audit/1.0'})
-                    with urllib.request.urlopen(req, timeout=1) as resp:
+                    with urllib.request.urlopen(req, timeout=3) as resp:
                         headers = resp.headers
                         asset_info["details"]["server_banner"] = headers.get('Server', 'Unknown')
                         
