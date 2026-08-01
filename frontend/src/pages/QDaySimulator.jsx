@@ -1,35 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { getDashboardData } from '../api';
 import { useNavigate } from 'react-router-dom';
+import { useScan } from '../context/ScanContext';
 
 const QDaySimulator = () => {
+  const { activeScanId, activeScanMetadata } = useScan();
   const [progress, setProgress] = useState({ harvest: 0, qday: 0, decrypt: 0 });
   const [status, setStatus] = useState('Standby');
   const [tte, setTte] = useState(null); // Time To Exposure (years)
   const [vulnCount, setVulnCount] = useState(0);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await getDashboardData();
-        if (res.data.success) {
-          const count = parseInt(res.data.data.summary.cbomVulnerabilities.value.replace(/,/g, ''));
-          setVulnCount(count);
-          
-          // PQC Sensitivity Model:
-          // Base Q-Day: 2029 (3 years away)
-          // Adjust based on specific risk posture
-          const postureScore = res.data.data.posture.quantumRisk || 85;
-          const calculatedTte = (12 - (postureScore / 10) - (count / 5000)).toFixed(1);
-          setTte(Math.max(2.1, calculatedTte));
-        }
-      } catch (e) {
-        setTte(7.5);
+  const fetchStats = async () => {
+    try {
+      const res = await getDashboardData();
+      if (res.data.success) {
+        const count = parseInt(res.data.data.summary.cbomVulnerabilities.value.replace(/,/g, ''));
+        setVulnCount(count);
+        
+        // PQC Sensitivity Model:
+        const postureScore = res.data.data.posture.legacyRemoval || 85;
+        const calculatedTte = (12 - (postureScore / 10) - (count / 5000)).toFixed(1);
+        setTte(Math.max(2.1, calculatedTte));
       }
-    };
+    } catch (e) {
+      setTte(7.5);
+    }
+  };
+
+  useEffect(() => {
     fetchStats();
-  }, []);
+  }, [activeScanId]);
 
   const startSimulation = () => {
     setStatus('Active');

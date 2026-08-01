@@ -1,27 +1,71 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ApiMetrics from '../components/ApiMetrics';
 import { runTriadScan as apiRunScan, chatWithExpert } from '../api';
+import { useScan } from '../context/ScanContext';
+import { useToast } from '../context/ToastContext';
 
 const TriadScanner = () => {
+  const navigate = useNavigate();
+  const { activeData, setActiveData, switchScan, pendingScan, setPendingScan } = useScan();
+  const { showToast } = useToast();
   const [isScanning, setIsScanning] = useState(false);
-  const [showResults, setShowResults] = useState(false);
-  const [findings, setFindings] = useState({ web: [], vpn: [], api: [], firmware: [], archival: [] });
-  const [riskScores, setRiskScores] = useState({ web: 0, vpn: 0, api: 0, firmware: 0, archival: 0, overall: 0 });
-  const [selectorLog, setSelectorLog] = useState(null);
-  const [apiMetrics, setApiMetrics] = useState(null);
-  const [cbom, setCbom] = useState(null);
-  const [remediation, setRemediation] = useState([]);
+  const [showResults, setShowResults] = useState(!!activeData);
+  const [webTarget, setWebTarget] = useState(activeData?.webUrl || '');
+  const [vpnTarget, setVpnTarget] = useState(activeData?.vpnUrl || '');
+  const [apiTarget, setApiTarget] = useState(activeData?.apiUrl || '');
+  const [jwtToken, setJwtToken] = useState('eyJhbGciOiJSUzI1NiIs...');
+  
+  const [findings, setFindings] = useState(activeData?.findings || { web: [], vpn: [], api: [], firmware: [], archival: [] });
+  const [riskScores, setRiskScores] = useState(activeData?.riskScores || { web: null, vpn: null, api: null, firmware: null, archival: null, overall: null });
+  const [selectorLog, setSelectorLog] = useState(activeData?.selectorLog || null);
+  const [apiMetrics, setApiMetrics] = useState(activeData?.apiMetrics || null);
+  const [cbom, setCbom] = useState(activeData?.cbom || null);
+  const [remediation, setRemediation] = useState(activeData?.remediation || []);
   const [scanProgress, setScanProgress] = useState('');
   const [tokenAnalysis, setTokenAnalysis] = useState('');
   const [analyzingToken, setAnalyzingToken] = useState(false);
 
+  useEffect(() => {
+    if (activeData) {
+      setFindings(activeData.findings);
+      setRiskScores(activeData.riskScores);
+      setApiMetrics(activeData.apiMetrics);
+      setCbom(activeData.cbom);
+      setRemediation(activeData.remediation || []);
+      setSelectorLog(activeData.selectorLog || null);
+      setWebTarget(activeData.webUrl);
+      setVpnTarget(activeData.vpnUrl);
+      setApiTarget(activeData.apiUrl);
+      setShowResults(true);
+    }
+  }, [activeData]);
+
+  // Handle Automated Scan from Discovery
+  useEffect(() => {
+    if (pendingScan && !isScanning) {
+      const { web, vpn, api } = pendingScan;
+      setWebTarget(web || '');
+      setVpnTarget(vpn || '');
+      setApiTarget(api || '');
+      setPendingScan(null); // Clear pending state
+      
+      // Artificial delay to let state update and UI show the values
+      setTimeout(() => {
+        const btn = document.getElementById('initiate-scan-btn');
+        if (btn) btn.click();
+      }, 500);
+    }
+  }, [pendingScan, isScanning]);
+
   const handleTokenAnalysis = async () => {
-    const token = document.getElementById('jwt-token-sandbox').value;
-    if (!token) return;
+    if (!jwtToken) return;
     setAnalyzingToken(true);
+    setTokenAnalysis('');
     try {
-      const res = await chatWithExpert(`Analyze this JWT token for PQC vulnerabilities and provide a QVS score (100/10/0) and NIST recommendation: ${token}`);
-      setTokenAnalysis(res.data.text);
+      const res = await chatWithExpert(`Analyze this JWT token for PQC vulnerabilities and provide a QVS score (100/10/0) and NIST recommendation: ${jwtToken}`);
+      // Corrected from .text to .response to match remediation.py backend
+      setTokenAnalysis(res.data.response || 'No analysis available.');
     } catch (e) {
       setTokenAnalysis('AI Analysis Failed. Ensure API Key is set.');
     } finally {
@@ -32,35 +76,35 @@ const TriadScanner = () => {
   const runTriadScan = async () => {
     setIsScanning(true);
     setShowResults(false);
-    setScanProgress('Initializing Triad Scanning Engine...');
+    setScanProgress('Running Triad scan across 5 pillars — real network probes, can take up to 2-3 minutes...');
 
     try {
-      setScanProgress('Probing Web/TLS endpoints...');
-      await new Promise(r => setTimeout(r, 400));
-      setScanProgress('Analyzing VPN gateway protocols...');
-      await new Promise(r => setTimeout(r, 400));
-      setScanProgress('Parsing API tokens & mTLS config...');
-
       const response = await apiRunScan({
-        webUrl: document.getElementById('scan-web').value,
-        vpnUrl: document.getElementById('scan-vpn').value,
-        apiUrl: document.getElementById('scan-api').value,
-        jwtToken: document.getElementById('jwt-token-sandbox').value
+        webUrl: webTarget,
+        vpnUrl: vpnTarget,
+        apiUrl: apiTarget,
+        jwtToken: jwtToken
       });
 
       if (response.data.success) {
         const result = response.data.data;
+        const scanId = result.id;
+        
         setFindings(result.findings);
-        setRiskScores(result.riskScores || { web: 0, vpn: 0, api: 0, firmware: 0, archival: 0, overall: 0 });
+        setRiskScores(result.riskScores || { web: null, vpn: null, api: null, firmware: null, archival: null, overall: null });
         setApiMetrics(result.apiMetrics);
         setCbom(result.cbom);
         setRemediation(result.remediation || []);
         setSelectorLog(result.selectorLog || null);
         setShowResults(true);
+
+        // Update Global Context
+        setActiveData(result);
+        switchScan(scanId);
       }
     } catch (err) {
       console.error('Scan Failed:', err);
-      alert('Scan failed. Ensure the Python/FastAPI backend is running on port 5006.');
+      showToast('Scan failed. Core engine unreachable.', 'error');
     } finally {
       setIsScanning(false);
       setScanProgress('');
@@ -75,7 +119,13 @@ const TriadScanner = () => {
     archival: { tag: 'ARCHIVAL PILLAR', title: 'Archival Encryption Engine', subtitle: 'BIKE/HQC KEM Analysis', class: 'pillar-e', icon: '🗄️' },
   };
 
+  // A null score means the pillar could not be probed — it is "not assessed",
+  // which must never be rendered as 0 ("no risk").
+  const isScored = (score) => score !== null && score !== undefined;
+  const qvsText = (score) => (isScored(score) ? score : 'N/A');
+
   const qvsColor = (score) => {
+    if (!isScored(score)) return 'var(--text-dim)';
     if (score >= 80) return '#C0272D';
     if (score >= 50) return '#D47800';
     if (score >= 20) return '#1A6BAA';
@@ -83,6 +133,7 @@ const TriadScanner = () => {
   };
 
   const qvsLabel = (score) => {
+    if (!isScored(score)) return 'NOT ASSESSED';
     if (score >= 80) return 'CRITICAL';
     if (score >= 50) return 'HIGH';
     if (score >= 20) return 'MODERATE';
@@ -97,24 +148,37 @@ const TriadScanner = () => {
         <div className="card-title"><span className="ct-icon">⚡</span>Triad Scanner — Define Attack Surface</div>
         <div className="scan-row">
           <span className="scan-badge sb-web">WEB/TLS</span>
-          <input type="text" id="scan-web" defaultValue="www.pnb.bank.in" className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
+          <input type="text" id="scan-web" value={webTarget} onChange={(e) => setWebTarget(e.target.value)} className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
           <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Port 443/TCP · Nginx / Apache / IIS</span>
         </div>
         <div className="scan-row">
           <span className="scan-badge sb-vpn">VPN/TLS</span>
-          <input type="text" id="scan-vpn" defaultValue="vpn.pnb.bank.in" className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
+          <input type="text" id="scan-vpn" value={vpnTarget} onChange={(e) => setVpnTarget(e.target.value)} className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
           <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Port 443/TCP · SSL-VPN / Cisco AnyConnect</span>
         </div>
         <div className="scan-row">
           <span className="scan-badge sb-api">API/TLS</span>
-          <input type="text" id="scan-api" defaultValue="api.pnb.bank.in" className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
+          <input type="text" id="scan-api" value={apiTarget} onChange={(e) => setApiTarget(e.target.value)} className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
           <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Port 443/TCP · REST / GraphQL / mTLS</span>
         </div>
         <div style={{ marginTop: '10px' }}>
-          <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '6px' }}>⬡ API PILLAR — Paste a sample JWT or OAuth Bearer Token for signing-algorithm analysis</div>
-          <textarea id="jwt-token-sandbox" className="form-input" style={{ width: '100%', height: '60px', fontFamily: 'var(--mono)', color: '#1A8A1A', background: '#F8FFF8' }} defaultValue="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesig"></textarea>
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+            <span>⬡ API PILLAR — Paste a sample JWT or OAuth Bearer Token for signing-algorithm analysis</span>
+            <button className="btn-pqc-text" style={{ fontSize: '10px', color: 'var(--pnb-red)', fontWeight: 700, cursor: 'pointer', background: 'none', border: 'none' }} onClick={handleTokenAnalysis} disabled={analyzingToken}>
+              {analyzingToken ? '⏳ ANALYZING...' : '🔍 ANALYZE TOKEN'}
+            </button>
+          </div>
+          <textarea id="jwt-token-sandbox" value={jwtToken} onChange={(e) => setJwtToken(e.target.value)} className="form-input" style={{ width: '100%', height: '60px', fontFamily: 'var(--mono)', color: '#1A8A1A', background: '#F8FFF8' }}></textarea>
+          
+          {tokenAnalysis && (
+            <div style={{ marginTop: '10px', padding: '12px', background: '#f9f9f9', borderRadius: '8px', borderLeft: '3px solid #C0272D', fontSize: '11px', whiteSpace: 'pre-wrap', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.05)' }}>
+              <div style={{ fontWeight: 700, marginBottom: '4px', color: '#C0272D', fontSize: '10px', letterSpacing: '1px' }}>🛡️ PQC ARCHITECT ANALYSIS:</div>
+              {tokenAnalysis}
+            </div>
+          )}
         </div>
         <button
+          id="initiate-scan-btn"
           className="btn btn-gold"
           style={{ marginTop: '12px', fontSize: '16px', width: '100%' }}
           onClick={runTriadScan}
@@ -143,7 +207,7 @@ const TriadScanner = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontFamily: 'var(--disp)', fontSize: '64px', fontWeight: 700, color: qvsColor(riskScores.overall), lineHeight: 1, textShadow: `0 0 30px ${qvsColor(riskScores.overall)}33` }}>
-                    {riskScores.overall}
+                    {qvsText(riskScores.overall)}
                   </div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text-dim)', letterSpacing: '2px' }}>QVS / 100</div>
                   <div style={{ marginTop: '8px', padding: '4px 16px', border: `1px solid ${qvsColor(riskScores.overall)}80`, color: qvsColor(riskScores.overall), fontFamily: 'var(--mono)', fontSize: '11px', display: 'inline-block', borderRadius: '4px' }}>
@@ -155,10 +219,10 @@ const TriadScanner = () => {
                     <div key={p} style={{ marginBottom: '8px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
                         <span>{p === 'web' ? 'WEB / TLS' : p === 'vpn' ? 'VPN / TLS' : p === 'api' ? 'API / JWT' : p === 'firmware' ? 'FIRMWARE' : 'ARCHIVAL'}</span>
-                        <span style={{ color: qvsColor(riskScores[p] || 0), fontWeight: 700 }}>{riskScores[p] || 0}</span>
+                        <span style={{ color: qvsColor(riskScores[p]), fontWeight: 700 }}>{qvsText(riskScores[p])}</span>
                       </div>
                       <div className="prog-bar">
-                        <div className="prog-fill pf-red" style={{ width: `${riskScores[p]}%`, background: `linear-gradient(90deg, ${qvsColor(riskScores[p])}, ${qvsColor(riskScores[p])}AA)` }}></div>
+                        <div className="prog-fill pf-red" style={{ width: `${isScored(riskScores[p]) ? riskScores[p] : 0}%`, background: `linear-gradient(90deg, ${qvsColor(riskScores[p])}, ${qvsColor(riskScores[p])}AA)` }}></div>
                       </div>
                     </div>
                   ))}
@@ -177,7 +241,7 @@ const TriadScanner = () => {
                   <div className="pc-tag">{meta.icon} {meta.tag}</div>
                   <div className="pc-title">{meta.title}</div>
                   <div style={{ fontSize: '10px', opacity: 0.7, marginBottom: '10px', fontFamily: 'var(--mono)' }}>{meta.subtitle}</div>
-                  <div style={{ fontSize: '10px', opacity: 0.8, marginBottom: '6px', fontFamily: 'var(--mono)', letterSpacing: '1px' }}>QVS: {riskScores[pillar]}/100</div>
+                  <div style={{ fontSize: '10px', opacity: 0.8, marginBottom: '6px', fontFamily: 'var(--mono)', letterSpacing: '1px' }}>QVS: {qvsText(riskScores[pillar])}{isScored(riskScores[pillar]) ? '/100' : ''}</div>
                   <div className="pc-findings">
                     {findings[pillar].map((f, i) => (
                       <div key={i} className="pc-finding">
@@ -195,6 +259,21 @@ const TriadScanner = () => {
                         </div>
                       </div>
                     ))}
+                    {pillar === 'web' && findings[pillar].length > 0 && (
+                      <div className="owasp-innovation-cta" style={{ marginTop: '16px' }}>
+                        <button 
+                          className="btn-pqc-innovation" 
+                          onClick={() => navigate('/owasp-audit', { state: { findings, url: webTarget, riskScores } })}
+                        >
+                          <span className="innovation-icon">🛡️</span>
+                          <div style={{ textAlign: 'left' }}>
+                            <div className="innovation-label">KEY INNOVATION</div>
+                            <div className="innovation-title">AUDIT OWASP COMPLIANCE (2025)</div>
+                          </div>
+                          <span className="innovation-arrow">➔</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -243,20 +322,6 @@ const TriadScanner = () => {
             </div>
           )}
 
-          {/* ── JWT Sandbox ───────────────────────────────────────────── */}
-          <div className="jwt-sandbox card">
-              <div className="card-title" style={{ fontSize: '13px' }}><span className="ct-icon">🔍</span> JWT Quantum Analysis Sandbox</div>
-              <textarea className="form-input" placeholder="Paste JWT token here..." id="jwt-token-sandbox-results" defaultValue="eyJhbGciOiJSUzI1NiIs..." style={{ width: '100%', height: '60px', fontFamily: 'var(--mono)', color: '#1A8A1A', background: '#F8FFF8' }}></textarea>
-              <button className="btn btn-red btn-sm" style={{ marginTop: '8px' }} onClick={handleTokenAnalysis} disabled={analyzingToken}>
-                {analyzingToken ? '⏳ ANALYZING...' : '🔍 Analyze Token'}
-              </button>
-              {tokenAnalysis && (
-                <div style={{ marginTop: '12px', padding: '12px', background: '#f9f9f9', borderRadius: '8px', borderLeft: '3px solid #C0272D', fontSize: '12px', whiteSpace: 'pre-wrap' }}>
-                  <div style={{ fontWeight: 700, marginBottom: '6px', color: '#C0272D' }}>🛡️ Architect Analysis:</div>
-                  {tokenAnalysis}
-                </div>
-              )}
-          </div>
         </div>
       )}
     </div>

@@ -31,8 +31,8 @@ const Layout = ({ onLogout }) => {
           <Outlet />
         </div>
         <div id="footer-bar">
-          <span>15/03/2026</span>
-          <span>PSB Hackathon 2026 — Qubit-Guard Platform by trust_x | Amrita Vishwa Vidyapeetham</span>
+          <span>{new Date().toLocaleDateString('en-GB')}</span>
+          <span>Qubit-Guard Platform</span>
           <span>v1.0</span>
         </div>
       </div>

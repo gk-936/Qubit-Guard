@@ -1,5 +1,15 @@
+from typing import Union
+
 """
 PQC Algorithm Registry — Canonical source of truth for all 6 NIST PQC algorithms.
+
+This module is a static reference registry, not a cryptographic engine: it holds
+authoritative metadata (parameter sizes, OIDs, cycle-count estimates) sourced from
+NIST FIPS 203/204/205 and related standards. It performs no cryptographic
+operations — key generation, signing, verification, encapsulation and
+decapsulation are NOT implemented here, and there is no liboqs (or equivalent)
+binding in this codebase. Consumers use this data to identify, classify and
+recommend algorithms, not to execute them.
 
 Covers:
   1. ML-KEM     (FIPS 203)  — Lattice KEM for Web/VPN key exchange
@@ -245,7 +255,7 @@ PQC_ALGORITHM_REGISTRY = {
 }
 
 
-def get_algorithm(name: str) -> dict | None:
+def get_algorithm(name: str) -> Union[dict, None]:
     """Look up an algorithm by name or alias."""
     name_upper = name.upper().strip()
     for key, algo in PQC_ALGORITHM_REGISTRY.items():

@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 
-from services.mobile_scanner import search_pnb_apps, scan_mobile_app
+from services.mobile_scanner import search_mobile_apps, scan_mobile_app
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ class MobileScanRequest(BaseModel):
 
 @router.get("/search")
 def search(query: str = ""):
-    apps = search_pnb_apps(query)
+    apps = search_mobile_apps(query)
     return {"success": True, "apps": apps}
 
 

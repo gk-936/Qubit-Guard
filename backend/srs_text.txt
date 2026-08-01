@@ -4,7 +4,7 @@ I n s t i t u t e N a m e :   A m r i t a  V i s h w a  V i d y a p e e t h a m
  
 Software Requirement Specification (SRS)  
 Date:
-QuantumShield.AI (Quantum-Proof Systems Scanner)
+Qubit-Guard (Quantum-Proof Systems Scanner)
 P S B  H a c k a t h o n  2 0 2 6  
 S o f t w a r e  R e q u i r e m e n t  S p e c i f i c a t i o n  
 V e r s i o n  1  
@@ -37,7 +37,7 @@ Member 3
 Signature:  
 Significant Changes  
 The purpose of this Software Requirements Specification (SRS) document is to identify and
-document the user requirements for QuantumShield.AI — Quantum-Proof Systems
+document the user requirements for Qubit-Guard — Quantum-Proof Systems
 Scanner. The end deliverable software supplied by trust_x will comprise all requirements
 documented in this document and will be operated in the manner specified herein. The
 source code will be developed base d on these requirements and will formally go through
@@ -127,7 +127,7 @@ Primary Users: Bank cybersecurity teams, IT  administrators (PNB and IIT -K of f
 Sec ondary Users: Compliance auditors, risk managers, and RBI/CER T -In regulatory reviewers
 Users are expected to have technical knowledge of cryptography and networking (primary users) or a
 working understanding of compliance frameworks (secondary users)
-QuantumShield.AI is a standalone, web-based enterprise security platform deployed within PNB's intranet DMZ. It is not
+Qubit-Guard is a standalone, web-based enterprise security platform deployed within PNB's intranet DMZ. It is not
 a component of any existing scanning tool — it is a purpose-built post-quantum cryptographic audit system. The product
 performs outbound TLS handshake probing of public-facing assets and does not require installation of agents on target
 servers, ensuring zero disruption to live banking services.

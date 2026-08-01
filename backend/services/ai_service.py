@@ -6,6 +6,7 @@ Powered by India's own Sarvam AI (sarvam-105b).
 
 import os
 import httpx
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,7 +41,7 @@ SYSTEM_PROMPT = (
     "3. **QVS Scoring** (FR-06): 100 = RSA-2048/ECC/DH (critical), 10 = Draft PQC, 0 = Correct PQC.\n"
     "4. **CBOM Output** (FR-08): CycloneDX 1.5 JSON with bit-depth, OIDs, and NIST status.\n"
     "5. **Remediation** (FR-11): Always recommend Hybrid Approach (Classical + PQC) for banking systems.\n"
-    "6. **CERT-In Compliance**: Reference Annexure-A requirements for all PNB audit reports.\n\n"
+    "6. **Compliance**: Reference relevant regional regulations (e.g., RBI/CERT-In for India, GDPR/DORA for EU) for all audit reports.\n\n"
 
     "## Response Guidelines\n"
     "- Give thorough, detailed responses. Aim for comprehensive answers that cover edge cases.\n"
@@ -53,7 +54,7 @@ SYSTEM_PROMPT = (
 )
 
 
-async def ask_remediation_expert(question: str, history: list | None = None) -> dict:
+async def ask_remediation_expert(question: str, history: Optional[list] = None) -> dict:
     """Interactive chat for PQC remediation expert queries via Sarvam AI."""
     if not SARVAM_API_KEY:
         return {"text": "AI Expert Offline. Please configure SARVAM_API_KEY in .env to enable the PQC Remediation Assistant."}

@@ -1,7 +1,0 @@
-STDOUT:
-
-STDERR:
-  File "<string>", line 1
-    import uvicorn; uvicorn.run(chr(39)main:app', host='0.0.0.0', port=5000)
-                                                               ^
-SyntaxError: unterminated string literal (detected at line 1)

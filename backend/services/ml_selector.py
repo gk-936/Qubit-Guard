@@ -1,8 +1,9 @@
 """
-ML-Based PQC Algorithm Smart Selector.
+Rule-Based PQC Algorithm Smart Selector.
 
-Pure-Python Random Forest classifier that selects the optimal PQC algorithm
-for a given scan environment based on:
+Pure-Python deterministic decision-tree ensemble, walking a hand-authored
+140-row rule table, that selects the optimal PQC algorithm for a given scan
+environment based on:
   - Pillar Type (Web, VPN, API, Mobile, Firmware, Archival)
   - Bandwidth Constraints (kbps)
   - Latency Sensitivity (ms)
@@ -10,9 +11,9 @@ for a given scan environment based on:
   - Data Retention (years)
   - Compliance Mandate (CERT-In, RBI, NIST)
 
-Training Data: Sovereign Indian datasets modeled on AIKosh network profiles,
-DST National PQC Testing & Certification Program (2026) benchmarks, and
-I4C Cybercrime behavioral patterns.
+Decision Data: a hand-authored rule table encoding NIST PQC selection guidance
+(FIPS 203 / 204 / 205 parameter sets) against deployment constraints. It is not
+collected or observed data, and no external dataset is loaded at runtime.
 
 Output: Algorithm selection with Selector_Log.
 """
@@ -20,11 +21,11 @@ Output: Algorithm selection with Selector_Log.
 from datetime import datetime
 
 
-# ── Sovereign Indian Training Dataset ─────────────────────────────────────────
-# Modeled from:
-#   - AIKosh (IndiaAI Datasets Platform) — Indian ISP bandwidth/latency profiles
-#   - DST National PQC Testing Program 2026 — algorithm performance benchmarks
-#   - I4C Cybercrime behavioral logs — attack surface frequency distributions
+# ── Decision Table ────────────────────────────────────────────────────────────
+# Hand-authored rows mapping deployment constraints to a PQC algorithm choice.
+# Each row encodes published algorithm characteristics (key/signature sizes and
+# security levels from FIPS 203/204/205) rather than any measured or collected
+# dataset. Treat this as an expert-authored rule set, not training data.
 #
 # Features: [pillar_idx, bandwidth_kbps, latency_ms, device_idx,
 #             retention_years, compliance_idx]
@@ -72,18 +73,19 @@ COMPLIANCE_MAP = {
     "certin": 0,
 }
 
-# ── Sovereign Training Data (200 rows) ───────────────────────────────────────
+# ── Rule Table ───────────────────────────────────────────────────────────────
 # Format: (pillar_idx, bandwidth_kbps, latency_ms, device_idx,
 #           retention_years, compliance_idx, label_idx)
-# Derived from AIKosh Indian ISP profiles (Jio Fiber avg 100Mbps/4ms,
-# BSNL rural avg 10Mbps/45ms, Airtel 4G avg 30Mbps/25ms)
+# The bandwidth/latency figures are representative network tiers chosen by hand
+# to span the range (fibre / broadband / rural / mobile). They are illustrative
+# constraint boundaries, not measurements from any ISP dataset.
 
-TRAINING_DATA = [
+RULE_TABLE = [
     # ── Web/TLS (pillar=0): ML-KEM for key exchange ──
-    (0, 100000, 4, 0, 1, 0, 0),    # Jio Fiber server → ML-KEM-768
+    (0, 100000, 4, 0, 1, 0, 0),    # High-BW fibre server → ML-KEM-768
     (0, 100000, 3, 0, 1, 2, 0),    # High-BW server NIST → ML-KEM-768
     (0, 50000, 8, 0, 1, 0, 0),     # Decent BW server → ML-KEM-768
-    (0, 10000, 45, 0, 1, 0, 11),   # BSNL rural server → ML-KEM-512 (low BW)
+    (0, 10000, 45, 0, 1, 0, 11),   # Low-BW rural server → ML-KEM-512 (low BW)
     (0, 5000, 80, 0, 1, 0, 11),    # Very low BW → ML-KEM-512
     (0, 200000, 2, 0, 5, 1, 1),    # Ultra-high BW, long retention → ML-KEM-1024
     (0, 150000, 3, 0, 3, 0, 1),    # High BW CERT-In → ML-KEM-1024
@@ -102,7 +104,7 @@ TRAINING_DATA = [
     (0, 95000, 5, 0, 1, 0, 0),
 
     # ── VPN/TLS (pillar=1): ML-KEM for tunnel key exchange ──
-    (1, 100000, 4, 0, 1, 0, 0),    # Jio server VPN → ML-KEM-768
+    (1, 100000, 4, 0, 1, 0, 0),    # High-BW fibre VPN → ML-KEM-768
     (1, 50000, 10, 0, 1, 0, 0),    # Standard VPN → ML-KEM-768
     (1, 10000, 40, 0, 1, 0, 11),   # Low BW VPN → ML-KEM-512
     (1, 200000, 2, 0, 5, 1, 1),    # High-sec VPN → ML-KEM-1024
@@ -146,8 +148,8 @@ TRAINING_DATA = [
     (2, 85000, 6, 0, 1, 0, 2),
 
     # ── Mobile/App (pillar=3): FN-DSA for compact signatures ──
-    (3, 30000, 25, 1, 1, 0, 5),    # Airtel 4G → FN-DSA-512
-    (3, 10000, 50, 1, 1, 0, 5),    # BSNL 4G → FN-DSA-512
+    (3, 30000, 25, 1, 1, 0, 5),    # Mid-BW mobile → FN-DSA-512
+    (3, 10000, 50, 1, 1, 0, 5),    # Low-BW mobile → FN-DSA-512
     (3, 50000, 15, 1, 1, 0, 5),    # Wi-Fi mobile → FN-DSA-512
     (3, 5000, 80, 1, 1, 0, 5),     # 3G fallback → FN-DSA-512
     (3, 100000, 5, 1, 3, 1, 6),    # High-BW mobile, RBI → FN-DSA-1024
@@ -224,14 +226,14 @@ TRAINING_DATA = [
     (2, 200000, 2, 0, 1, 0, 3),    # High BW API → ML-DSA-87
 
     # ── Additional Indian network profiles ──
-    (0, 75000, 7, 0, 1, 0, 0),     # Airtel Fiber → ML-KEM-768
-    (0, 12000, 42, 0, 1, 0, 11),   # BSNL broadband → ML-KEM-512
-    (1, 75000, 7, 0, 1, 0, 0),     # Airtel VPN → ML-KEM-768
-    (1, 12000, 42, 0, 1, 0, 11),   # BSNL VPN → ML-KEM-512
-    (2, 75000, 7, 0, 1, 0, 2),     # Airtel API → ML-DSA-65
-    (3, 12000, 42, 1, 1, 0, 5),    # BSNL mobile → FN-DSA-512
-    (2, 12000, 42, 0, 1, 0, 2),    # BSNL API → ML-DSA-65
-    (3, 75000, 7, 1, 1, 0, 5),     # Airtel mobile → FN-DSA-512
+    (0, 75000, 7, 0, 1, 0, 0),     # Mid-BWFiber → ML-KEM-768
+    (0, 12000, 42, 0, 1, 0, 11),   # Low-BWbroadband → ML-KEM-512
+    (1, 75000, 7, 0, 1, 0, 0),     # Mid-BWVPN → ML-KEM-768
+    (1, 12000, 42, 0, 1, 0, 11),   # Low-BWVPN → ML-KEM-512
+    (2, 75000, 7, 0, 1, 0, 2),     # Mid-BWAPI → ML-DSA-65
+    (3, 12000, 42, 1, 1, 0, 5),    # Low-BWmobile → FN-DSA-512
+    (2, 12000, 42, 0, 1, 0, 2),    # Low-BWAPI → ML-DSA-65
+    (3, 75000, 7, 1, 1, 0, 5),     # Mid-BWmobile → FN-DSA-512
     (0, 55000, 9, 0, 1, 0, 0),     # ACT Fiber → ML-KEM-768
     (1, 55000, 9, 0, 1, 0, 0),     # ACT VPN → ML-KEM-768
 ]
@@ -319,8 +321,13 @@ def _build_tree(data: list, n_features: int, max_depth: int, depth: int = 0) -> 
     return _DecisionNode(feature=feat, threshold=thresh, left=left_node, right=right_node)
 
 
-class _RandomForest:
-    """Minimal Random Forest with deterministic bagging."""
+class _RuleTreeEnsemble:
+    """Deterministic decision-tree ensemble over a hand-authored rule table.
+
+    Each tree is built from a deterministic strided subset of the rule table
+    (not a random bootstrap sample), so results are fully reproducible: the
+    same inputs always walk the same tree paths and produce the same vote.
+    """
 
     def __init__(self, n_trees: int = 3, max_depth: int = 6):
         self.n_trees = n_trees
@@ -328,10 +335,12 @@ class _RandomForest:
         self.trees: list[_DecisionNode] = []
 
     def fit(self, data: list, n_features: int):
-        """Train forest with deterministic bootstrap samples."""
+        """Build ensemble trees from deterministic strided subsets of the rule table."""
         n = len(data)
         for i in range(self.n_trees):
-            # Deterministic bootstrap: offset stride
+            # Deterministic stride sampling (not bootstrap/bagging): the
+            # offset and stride vary per tree so each tree sees a different
+            # deterministic ordering of the same rule table.
             stride = max(1, n // (self.n_trees + i))
             sample = [data[(j * stride + i * 7) % n] for j in range(n)]
             tree = _build_tree(sample, n_features, self.max_depth)
@@ -348,10 +357,10 @@ class _RandomForest:
         return winner, confidence
 
 
-# ── Train the model at import time (deterministic, fast) ──────────────────────
+# ── Build the ensemble at import time (deterministic, fast) ───────────────────
 
-_model = _RandomForest(n_trees=3, max_depth=6)
-_model.fit(TRAINING_DATA, n_features=6)
+_model = _RuleTreeEnsemble(n_trees=3, max_depth=6)
+_model.fit(RULE_TABLE, n_features=6)
 
 
 # ── Feature Descriptions (for Selector_Log) ──────────────────────────────────
@@ -413,7 +422,7 @@ def select_algorithm(
     )
 
     selector_log = (
-        f"Algorithm [{algorithm}] selected via ML Model based on "
+        f"Algorithm [{algorithm}] selected via rule-based decision-tree ensemble based on "
         f"[{network_chars}]."
     )
 
@@ -460,12 +469,12 @@ def select_algorithm(
             "compliance": compliance_name,
         },
         "model_info": {
-            "type": "Random Forest",
+            "type": "Deterministic Decision-Tree Ensemble",
             "n_trees": _model.n_trees,
             "max_depth": _model.max_depth,
-            "training_samples": len(TRAINING_DATA),
-            "training_source": "AIKosh (IndiaAI) + DST PQC 2026 + I4C Behavioral Logs",
-            "sovereign_data": True,
+            "training_samples": len(RULE_TABLE),
+            "training_source": "Hand-authored rule table derived from NIST FIPS 203/204/205 parameter sets",
+            "external_dataset": False,
         },
         "timestamp": datetime.utcnow().isoformat(),
     }

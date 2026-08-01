@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useScan } from '../context/ScanContext';
+import { getPQCAlgorithms, getPQCAudit, selectPQCAlgorithm } from '../api';
 
 const PILLAR_OPTIONS = [
   { value: 'Web', label: 'Pillar A — Web/TLS', icon: '🌐' },
@@ -12,25 +14,8 @@ const PILLAR_OPTIONS = [
 const DEVICE_OPTIONS = ['Server', 'Mobile', 'IoT', 'HSM'];
 const COMPLIANCE_OPTIONS = ['CERT-In', 'RBI', 'NIST'];
 
-const ALGO_COLORS = {
-  'ML-KEM': '#0284c7',
-  'ML-DSA': '#9333ea',
-  'SLH-DSA': '#16a34a',
-  'FN-DSA': '#d97706',
-  'XMSS': '#dc2626',
-  'LMS': '#dc2626',
-  'BIKE': '#db2777',
-  'HQC': '#db2777',
-};
-
-function getAlgoColor(name) {
-  for (const [key, color] of Object.entries(ALGO_COLORS)) {
-    if (name.toUpperCase().includes(key.toUpperCase())) return color;
-  }
-  return '#0284c7';
-}
-
 const PQCSelector = () => {
+  const { activeScanId, activeData } = useScan();
   const [pillar, setPillar] = useState('Web');
   const [bandwidth, setBandwidth] = useState(50000);
   const [latency, setLatency] = useState(10);
@@ -44,43 +29,45 @@ const PQCSelector = () => {
   const [activeTab, setActiveTab] = useState('selector');
 
   useEffect(() => {
+    if (activeData) {
+      // Contextual auto-fill from scan
+      if (activeData.findings?.web?.length > 0) setPillar('Web');
+      else if (activeData.findings?.api?.length > 0) setPillar('API');
+      else if (activeData.findings?.vpn?.length > 0) setPillar('VPN');
+    }
+  }, [activeScanId, activeData]);
+
+  useEffect(() => {
     fetchAlgorithms();
     fetchAudit();
   }, []);
 
   const fetchAlgorithms = async () => {
     try {
-      const res = await fetch('/api/pqc/algorithms');
-      const data = await res.json();
-      if (data.success) setAlgorithms(data.data);
+      const res = await getPQCAlgorithms();
+      if (res.data.success) setAlgorithms(res.data.data);
     } catch (e) { console.error('Failed to fetch algorithms', e); }
   };
 
   const fetchAudit = async () => {
     try {
-      const res = await fetch('/api/pqc/audit');
-      const data = await res.json();
-      if (data.success) setAuditTable(data.data);
+      const res = await getPQCAudit();
+      if (res.data.success) setAuditTable(res.data.data);
     } catch (e) { console.error('Failed to fetch audit', e); }
   };
 
   const runSelection = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/pqc/select', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pillar,
-          bandwidth_kbps: bandwidth,
-          latency_ms: latency,
-          device_type: deviceType,
-          retention_years: retention,
-          compliance,
-        }),
+      const res = await selectPQCAlgorithm({
+        pillar,
+        bandwidth_kbps: bandwidth,
+        latency_ms: latency,
+        device_type: deviceType,
+        retention_years: retention,
+        compliance,
       });
-      const data = await res.json();
-      if (data.success) setResult(data.data);
+      if (res.data.success) setResult(res.data.data);
     } catch (e) {
       console.error('Selection failed', e);
     }
@@ -163,14 +150,14 @@ const PQCSelector = () => {
         <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: 'linear-gradient(135deg, #0284c722, #9333ea22)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>🧠</div>
         <div>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff', textShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>PQC Smart Selector</h2>
-          <p style={{ margin: 0, fontSize: '12px', color: 'rgba(255,255,255,0.8)', fontFamily: 'var(--mono)' }}>ML-Based Algorithm Selection Engine • Sovereign Indian Dataset • DST PQC Roadmap 2026</p>
+          <p style={{ margin: 0, fontSize: '12px', color: 'rgba(255,255,255,0.8)', fontFamily: 'var(--mono)' }}>Rule-Based Algorithm Selection Engine • NIST FIPS 203/204/205 Rule Table • DST PQC Roadmap 2026</p>
         </div>
       </div>
 
       {/* Tab Navigation */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(0,0,0,0.15)', borderRadius: '10px', padding: '4px', boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.1)' }}>
         {[
-          { id: 'selector', label: '🧠 ML Selector', badge: 'AI' },
+          { id: 'selector', label: '🧠 PQC Selector', badge: 'RULES' },
           { id: 'registry', label: '📦 Algorithm Registry' },
           { id: 'audit', label: '🛡️ Verification Audit' },
         ].map(tab => (
@@ -188,7 +175,7 @@ const PQCSelector = () => {
         ))}
       </div>
 
-      {/* ── TAB: ML Selector ── */}
+      {/* ── TAB: PQC Selector ── */}
       {activeTab === 'selector' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
           {/* Input Form */}
@@ -223,7 +210,7 @@ const PQCSelector = () => {
                   onChange={e => setBandwidth(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#0284c7' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'rgba(0,0,0,0.3)', fontFamily: 'var(--mono)' }}>
-                  <span>1 Mbps (BSNL 2G)</span><span>300 Mbps (Jio Fiber)</span>
+                  <span>1 Mbps (low-BW mobile)</span><span>300 Mbps (fibre)</span>
                 </div>
               </div>
 
@@ -294,7 +281,7 @@ const PQCSelector = () => {
                   fontSize: '13px', fontWeight: 700, fontFamily: 'var(--mono)', letterSpacing: '1px',
                   opacity: loading ? 0.6 : 1, transition: 'all 0.3s',
                 }}>
-                {loading ? '⏳ COMPUTING...' : '🧠 RUN ML SELECTOR'}
+                {loading ? '⏳ COMPUTING...' : '🧠 RUN SELECTOR'}
               </button>
             </div>
           </div>
@@ -306,7 +293,7 @@ const PQCSelector = () => {
             {!result ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', opacity: 0.3 }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>🧠</div>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center' }}>Configure scan metadata and run the ML Selector<br/>to see the optimal PQC algorithm recommendation.</p>
+                <p style={{ fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center' }}>Configure scan metadata and run the Selector<br/>to see the optimal PQC algorithm recommendation.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
@@ -368,8 +355,8 @@ const PQCSelector = () => {
                     <span>Model: {result.model_info.type}</span>
                     <span>Trees: {result.model_info.n_trees}</span>
                     <span>Depth: {result.model_info.max_depth}</span>
-                    <span>Training: {result.model_info.training_samples} samples</span>
-                    <span>Data: {result.model_info.sovereign_data ? '🇮🇳 Sovereign' : 'Mixed'}</span>
+                    <span>Rules: {result.model_info.training_samples} rows</span>
+                    <span>Source: {result.model_info.training_source}</span>
                   </div>
                 )}
               </div>
@@ -498,6 +485,16 @@ const PQCSelector = () => {
       )}
     </div>
   );
+};
+
+// ── Helpers ──
+const getAlgoColor = (algo) => {
+  const a = algo?.toUpperCase() || '';
+  if (a.includes('KEM') || a.includes('KYBER')) return '#0284c7'; // Blue
+  if (a.includes('DSA') || a.includes('DILITHIUM')) return '#9333ea'; // Purple
+  if (a.includes('XMSS') || a.includes('LMS')) return '#16a34a'; // Green
+  if (a.includes('BIKE') || a.includes('HQC')) return '#d97706'; // Orange
+  return '#666'; // Default Gray
 };
 
 // ── Styles ──

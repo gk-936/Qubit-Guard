@@ -1,24 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { searchMobileApps, scanMobileApp as apiScanApp } from '../api';
 import { useNavigate } from 'react-router-dom';
+import { useScan } from '../context/ScanContext';
 
 const MobileScanner = () => {
+  const { activeScanId, activeScanMetadata } = useScan();
   const navigate = useNavigate();
   const [apps, setApps] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('PNB');
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedApp, setSelectedApp] = useState(null);
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
 
   useEffect(() => {
-    searchApps();
-  }, []);
+    // Universal App Discovery: Extract bank name from target URL
+    if (activeScanMetadata?.target) {
+      const parts = activeScanMetadata.target.replace('www.', '').split('.');
+      const bankName = parts[0].toUpperCase();
+      setSearchQuery(bankName);
+      searchApps(bankName);
+    } else {
+      searchApps('PNB'); // Default fallback
+    }
+  }, [activeScanMetadata]);
 
-  const searchApps = async () => {
+  const searchApps = async (queryOverride) => {
+    const q = queryOverride || searchQuery;
+    if (!q) return;
     setIsSearching(true);
     try {
-      const response = await searchMobileApps(searchQuery);
+      const response = await searchMobileApps(q);
       if (response.data.success) {
         setApps(response.data.apps);
       }
@@ -49,13 +61,13 @@ const MobileScanner = () => {
   return (
     <div id="page-mobile" className="page-view">
       <div className="card">
-        <div className="card-title"><span className="ct-icon">📱</span>Mobile App Presence — Play Store & App Store</div>
-        <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>Searching for official PNB applications and analyzing their cryptographic posture.</p>
+        <div className="card-title"><span className="ct-icon">📱</span>Universal Mobile App Presence Auditor</div>
+        <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>Searching for official mobile applications and analyzing their cryptographic compliance gateways.</p>
         
         <div className="search-bar">
           <span className="search-icon">🔍</span>
-          <input type="text" placeholder="Search for PNB Apps..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-          <button className="btn btn-gold btn-sm" onClick={searchApps}>Refresh Search</button>
+          <input type="text" placeholder="Search for Bank Apps (e.g. SBI, HDFC)..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+          <button className="btn btn-gold btn-sm" onClick={() => searchApps()}>Refresh Search</button>
         </div>
 
         {isSearching ? (
@@ -75,7 +87,14 @@ const MobileScanner = () => {
             <tbody>
               {apps.map((app, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 700 }}>{app.name}</td>
+                  <td style={{ fontWeight: 700 }}>
+                    {app.name}
+                    {app.source === 'derived-from-ios' && (
+                      <div style={{ fontSize: '10px', fontWeight: 500, color: '#a66a00' }} title={app.note}>
+                        ⚠ inferred from iOS listing — not independently verified
+                      </div>
+                    )}
+                  </td>
                   <td style={{ color: app.platform === 'Android' ? '#A4C639' : '#555' }}>
                     {app.platform === 'Android' ? '🤖 Android' : '🍏 iOS'}
                   </td>
@@ -113,10 +132,15 @@ const MobileScanner = () => {
                 {scanResult.findings.map((f, i) => (
                   <div key={i} className="pc-finding" style={{ borderBottom: '1px solid #eee', paddingBottom: '8px', marginBottom: '8px', color: '#333' }}>
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <div className={`pf-sev sev-${f.severity === 'high' || f.severity === 'critical' ? 'danger' : 'warn'}`}></div>
+                      <div className={`pf-sev sev-${f.severity === 'high' || f.severity === 'critical' ? 'danger' : f.severity === 'info' ? 'safe' : 'warn'}`}></div>
                       <div>
-                        <div style={{ fontWeight: 700, fontSize: '12px' }}>⚠ {f.issue}</div>
-                        <div style={{ fontSize: '11px', color: '#666' }}>{f.detail}</div>
+                        <div style={{ fontWeight: 700, fontSize: '12px' }}>{f.severity === 'info' ? 'ℹ' : '⚠'} {f.issue}</div>
+                        <div style={{ fontSize: '11px', color: '#444', fontWeight: 500, margin: '2px 0' }}>{f.detail}</div>
+                        {f.recommendation && (
+                          <div style={{ fontSize: '10px', color: '#666', fontStyle: 'italic', background: '#f9f9f9', padding: '4px', borderRadius: '4px', borderLeft: '2px solid #ccc', marginTop: '4px' }}>
+                             <b>Remediation:</b> {f.recommendation}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -124,8 +148,17 @@ const MobileScanner = () => {
               </div>
               <div style={{ textAlign: 'center', borderLeft: '1px solid #eee', paddingLeft: '20px' }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#888', letterSpacing: '2px' }}>MOBILE PQC SCORE</div>
-                <div style={{ fontSize: '64px', fontWeight: 700, color: scanResult.pqc_score > 70 ? '#1A8A1A' : '#C0272D' }}>{scanResult.pqc_score}</div>
-                <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NEEDS TRANSITION</div>
+                {scanResult.pqc_score === null || scanResult.pqc_score === undefined ? (
+                  <>
+                    <div style={{ fontSize: '40px', fontWeight: 700, color: '#888' }}>N/A</div>
+                    <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NOT ASSESSED</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '64px', fontWeight: 700, color: scanResult.pqc_score > 70 ? '#1A8A1A' : '#C0272D' }}>{scanResult.pqc_score}</div>
+                    <div className="risk-badge rb-medium" style={{ fontSize: '14px', padding: '6px 20px' }}>NEEDS TRANSITION</div>
+                  </>
+                )}
                 <button className="btn btn-outline btn-sm" onClick={() => navigate('/remediation')} style={{ marginTop: '20px', display: 'block', width: '100%' }}>View Remediation Code</button>
               </div>
             </div>

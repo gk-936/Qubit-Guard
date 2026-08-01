@@ -1,26 +1,23 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const ApiMetrics = ({ data }) => {
-  // Mock data if none provided
-  const metrics = data || {
-    total: 45,
-    discovered: 12,
-    buckets: {
-      'Auth / Identity': 8,
-      'Payment Processing': 15,
-      'Internal Services': 10,
-      'External Partners': 12
-    },
-    quantumRisk: {
-      vulnerable: 38,
-      pqc_ready: 7
-    }
-  };
+  const navigate = useNavigate();
+  if (!data) return (
+    <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '200px', opacity: 0.5 }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '24px', marginBottom: '10px' }}>🌐</div>
+        <div style={{ fontSize: '12px', fontFamily: 'var(--mono)' }}>Awaiting API Discovery Data...</div>
+      </div>
+    </div>
+  );
+
+  const metrics = data;
 
   return (
     <div className="card">
       <div className="card-title">
-        <span className="ct-icon">🌐</span> API Discovery & Bucketing (AI-Analyzed)
+        <span className="ct-icon">🌐</span> API Discovery & Bucketing (HTTP-Probed)
       </div>
       <div className="grid-2" style={{ gap: '16px' }}>
         <div>
@@ -57,7 +54,7 @@ const ApiMetrics = ({ data }) => {
         </div>
       </div>
       <div style={{ marginTop: '12px', textAlign: 'right' }}>
-        <button className="btn btn-outline btn-sm">View Full AI Analysis Report</button>
+        <button className="btn btn-outline btn-sm" onClick={() => navigate('/remediation')}>View Full AI Analysis Report</button>
       </div>
     </div>
   );

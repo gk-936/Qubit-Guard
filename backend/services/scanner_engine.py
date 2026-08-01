@@ -16,11 +16,24 @@ import ssl
 import socket
 import json
 import base64
+import time
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
+import urllib.request
+import urllib.error
 
 from services.pqc_algorithms import PQC_ALGORITHM_REGISTRY, generate_audit_table
 from services.ml_selector import select_algorithm as ml_select
+
+log = logging.getLogger(__name__)
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
+    _HAS_CRYPTOGRAPHY = True
+except ImportError:  # pragma: no cover - cryptography is a declared dependency
+    _HAS_CRYPTOGRAPHY = False
 
 
 # ── QVS Scoring (FR-06) ──────────────────────────────────────────────────────
@@ -82,13 +95,162 @@ QVS_MAP = {
 }
 
 
+def _evidence_summary(findings: list) -> dict:
+    """Count findings by evidence class for a pillar's return dict.
+
+    "measured" = the claim follows directly from something observed on the wire.
+    "inferred" = the claim is extrapolated from a different observation (e.g.
+    firmware signing inferred from web PKI, archival key-wrapping inferred from
+    TLS key exchange, VPN vendor inferred from a keyword match on cert CN/SAN).
+    """
+    measured = sum(1 for f in findings if f.get("evidence") == "measured")
+    inferred = sum(1 for f in findings if f.get("evidence") == "inferred")
+    return {"measured": measured, "inferred": inferred}
+
+
 def _qvs(algorithm: str) -> int:
-    """Return QVS score for a given algorithm string."""
+    """Return QVS score for a given algorithm string.
+
+    Matches the longest key first so that a specific label wins over a substring
+    of itself — e.g. "ECDHE-RSA" must score as ECDHE-RSA (90), not as RSA (100).
+    """
     algo_upper = algorithm.upper().strip()
-    for key, score in QVS_MAP.items():
+    for key in sorted(QVS_MAP, key=len, reverse=True):
         if key.upper() in algo_upper:
-            return score
+            return QVS_MAP[key]
     return 75  # Unknown defaults to high risk
+
+
+# ── Cryptographic Parameter Derivation ───────────────────────────────────────
+
+def _cert_public_key(der_cert: bytes) -> tuple:
+    """Read the certificate's actual public key algorithm and size from the DER bytes.
+
+    This is the authoritative source for the authentication algorithm. It cannot be
+    inferred from the TLS 1.3 cipher suite name, which encodes only the AEAD and hash.
+
+    Returns (algorithm, bits) — algorithm is None when it cannot be determined.
+    """
+    if not (_HAS_CRYPTOGRAPHY and der_cert):
+        return None, 0
+    try:
+        pub = x509.load_der_x509_certificate(der_cert).public_key()
+    except Exception:
+        return None, 0
+    if isinstance(pub, rsa.RSAPublicKey):
+        return "RSA", pub.key_size
+    if isinstance(pub, ec.EllipticCurvePublicKey):
+        return "ECDSA", pub.curve.key_size
+    if isinstance(pub, ed25519.Ed25519PublicKey):
+        return "Ed25519", 256
+    if isinstance(pub, ed448.Ed448PublicKey):
+        return "Ed448", 448
+    if isinstance(pub, dsa.DSAPublicKey):
+        return "DSA", pub.key_size
+    return None, 0
+
+
+def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = None) -> dict:
+    """Derive the key exchange and authentication algorithm for a TLS connection.
+
+    TLS 1.3 renamed its cipher suites (e.g. TLS_AES_256_GCM_SHA384) so that they no
+    longer encode the key exchange or the authentication algorithm — both were moved
+    into the handshake extensions. Inferring them from the suite name therefore only
+    works for TLS 1.2 and below.
+
+    Key exchange:
+      - TLS 1.2 and below: parsed from the cipher suite name (authoritative there).
+      - TLS 1.3: always ephemeral (EC)DHE by protocol design. The specific negotiated
+        group is not exposed by Python's ssl module before 3.13, so it is reported as
+        ECDHE with the group marked unknown rather than guessed.
+
+    Authentication: read from the certificate's public key, never from the suite name.
+    """
+    name = (cipher_name or "").upper()
+    version = tls_version or ""
+    is_tls13 = version == "TLSv1.3"
+
+    if is_tls13:
+        key_exchange = "ECDHE"
+        kx_group = "unknown (not exposed by this Python runtime)"
+    elif "ECDHE" in name:
+        key_exchange = "ECDHE"
+        kx_group = "from cipher suite"
+    elif "DHE" in name:
+        key_exchange = "DHE"
+        kx_group = "from cipher suite"
+    elif "ECDH" in name:
+        key_exchange = "ECDH (static)"
+        kx_group = "from cipher suite"
+    elif "RSA" in name:
+        # Static RSA key transport — only valid in TLS 1.2 and below.
+        key_exchange = "RSA"
+        kx_group = "from cipher suite"
+    else:
+        key_exchange = "Unknown"
+        kx_group = "undetermined"
+
+    auth_algo, auth_bits = _cert_public_key(der_cert)
+    if auth_algo is None:
+        # Fall back to the suite name, which is only meaningful pre-TLS 1.3.
+        if not is_tls13 and "ECDSA" in name:
+            auth_algo, auth_source = "ECDSA", "cipher suite"
+        elif not is_tls13 and "RSA" in name:
+            auth_algo, auth_source = "RSA", "cipher suite"
+        else:
+            auth_algo, auth_source = "Unknown", "undetermined"
+    else:
+        auth_source = "certificate public key"
+
+    return {
+        "key_exchange": key_exchange,
+        "key_exchange_group": kx_group,
+        "auth_algo": auth_algo,
+        "auth_bits": auth_bits,
+        "auth_source": auth_source,
+    }
+
+
+# ── Shared TLS Probe ─────────────────────────────────────────────────────────
+
+def _get_tls_info(url: str) -> dict:
+    """Perform a real TLS handshake and return cert/cipher metadata."""
+    parsed = urlparse(url if url.startswith("http") else f"https://{url}")
+    host = parsed.hostname or url
+    port = parsed.port or 443
+    try:
+        context = ssl.create_default_context()
+        started = time.monotonic()
+        with socket.create_connection((host, port), timeout=8) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as tls:
+                handshake_ms = round((time.monotonic() - started) * 1000)
+                cert = tls.getpeercert()
+                der_cert = tls.getpeercert(binary_form=True)
+                cipher = tls.cipher()
+                tls_version = tls.version()
+                subject = dict(x[0] for x in cert.get("subject", []))
+                issuer = dict(x[0] for x in cert.get("issuer", []))
+                sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
+                cipher_name = cipher[0] if cipher else "Unknown"
+                cipher_bits = cipher[2] if cipher else 0
+                crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
+                return {
+                    "reachable": True, "host": host, "port": port,
+                    "cn": subject.get("commonName", "N/A"),
+                    "issuer_org": issuer.get("organizationName", "N/A"),
+                    "sans": sans,
+                    "cipher_name": cipher_name, "cipher_bits": cipher_bits,
+                    "tls_version": tls_version,
+                    "key_exchange": crypto["key_exchange"],
+                    "key_exchange_group": crypto["key_exchange_group"],
+                    "auth_algo": crypto["auth_algo"],
+                    "auth_bits": crypto["auth_bits"],
+                    "auth_source": crypto["auth_source"],
+                    "handshake_ms": handshake_ms,
+                    "not_after": cert.get("notAfter", "N/A"),
+                }
+    except Exception as e:
+        return {"reachable": False, "host": host, "error": str(e)}
 
 
 # ── Pillar A: TLS Certificate Engine ─────────────────────────────────────────
@@ -104,9 +266,12 @@ def _scan_web_tls(web_url: str) -> dict:
         port = parsed.port or 443
 
         context = ssl.create_default_context()
+        started = time.monotonic()
         with socket.create_connection((host, port), timeout=8) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
+                handshake_ms = round((time.monotonic() - started) * 1000)
                 cert = tls_sock.getpeercert()
+                der_cert = tls_sock.getpeercert(binary_form=True)
                 cipher = tls_sock.cipher()  # (name, version, bits)
                 tls_version = tls_sock.version()
 
@@ -120,41 +285,92 @@ def _scan_web_tls(web_url: str) -> dict:
         cipher_name = cipher[0] if cipher else "Unknown"
         cipher_bits = cipher[2] if cipher else 0
 
-        # Determine key type from cipher name
-        key_type = "RSA"
-        if "ECDSA" in cipher_name or "ECDHE" in cipher_name:
-            key_type = "ECDHE-RSA" if "RSA" in cipher_name else "ECDHE-ECDSA"
+        # Key exchange from the protocol, authentication from the certificate —
+        # never inferred from the TLS 1.3 cipher suite name, which encodes neither.
+        crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
+        key_exchange = crypto["key_exchange"]
+        auth_algo = crypto["auth_algo"]
+        auth_bits = crypto["auth_bits"]
+        auth_label = f"{auth_algo}-{auth_bits}" if auth_bits else auth_algo
 
-        qvs = _qvs(key_type)
+        # Pillar QVS is driven by the weaker of the two primitives in use.
+        kx_qvs = _qvs(key_exchange)
+        auth_qvs = _qvs(auth_label)
+        qvs = max(kx_qvs, auth_qvs)
         pillar_qvs_scores.append(qvs)
 
         findings.append({
             "severity": "info",
             "issue": f"Certificate Detected: {cn}",
-            "detail": f"Issuer: {issuer_org} | Cipher: {cipher_name} ({cipher_bits}-bit) | TLS: {tls_version} | Expires: {not_after}",
+            "detail": (
+                f"Issuer: {issuer_org} | Cipher: {cipher_name} ({cipher_bits}-bit) | "
+                f"TLS: {tls_version} | Key exchange: {key_exchange} "
+                f"(group: {crypto['key_exchange_group']}) | "
+                f"Certificate key: {auth_label} (read from {crypto['auth_source']}) | "
+                f"Expires: {not_after}"
+            ),
             "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
             "raw": {
                 "cn": cn,
                 "issuer": issuer_org,
                 "cipher": cipher_name,
                 "bits": cipher_bits,
                 "tls_version": tls_version,
-                "key_type": key_type,
-                "key_size": f"{cipher_bits}-bit",
+                "key_exchange": key_exchange,
+                "key_exchange_group": crypto["key_exchange_group"],
+                "auth_algo": auth_algo,
+                "auth_bits": auth_bits,
+                "auth_source": crypto["auth_source"],
+                "key_type": auth_label,
+                "key_size": f"{auth_bits}-bit" if auth_bits else "unknown",
+                "handshake_ms": handshake_ms,
                 "mode": "GCM" if "GCM" in cipher_name else "CBC"
             }
         })
 
-        # Flag quantum-vulnerable ciphers
-        if "RSA" in key_type or "ECDHE" in key_type or "ECDSA" in key_type:
-            sev = "critical" if "RSA" in key_type else "high"
+        # Flag the quantum-vulnerable key exchange (harvest-now-decrypt-later exposure).
+        if key_exchange in ("ECDHE", "DHE", "ECDH (static)", "RSA"):
             findings.append({
-                "severity": sev,
-                "issue": f"Quantum-Vulnerable Key Exchange: {key_type}",
-                "detail": f"Classical {key_type} key exchange allows an attacker to harvest encrypted user session cookies and login credentials today, and decrypt them once a cryptographically-relevant quantum computer becomes available (HNDL attack).",
-                "recommendation": "Update Nginx ssl_ciphers to support FIPS 203 (ML-KEM). Enable hybrid key exchange (X25519MLKEM768) for TLS 1.3.",
+                "severity": "critical" if key_exchange == "RSA" else "high",
+                "issue": f"Quantum-Vulnerable Key Exchange: {key_exchange}",
+                "detail": (
+                    f"{key_exchange} key exchange is breakable by Shor's algorithm on a CRQC. "
+                    f"An attacker can record encrypted session traffic today and decrypt it later (HNDL attack)."
+                    + ("" if key_exchange != "ECDHE" or tls_version != "TLSv1.3" else
+                       " Note: TLS 1.3 always uses an ephemeral (EC)DHE exchange; the specific "
+                       "negotiated group is not exposed by this Python runtime.")
+                ),
+                "recommendation": "Enable hybrid key exchange (X25519MLKEM768) for TLS 1.3 per FIPS 203 (ML-KEM).",
+                "evidence": "measured",
+                "inferred_from": None,
             })
-            pillar_qvs_scores.append(qvs)
+            pillar_qvs_scores.append(kx_qvs)
+
+        # Flag the quantum-vulnerable certificate signature key, separately from the key exchange.
+        if auth_algo in ("RSA", "ECDSA", "DSA", "Ed25519", "Ed448"):
+            findings.append({
+                "severity": "critical" if auth_algo in ("RSA", "DSA") else "high",
+                "issue": f"Quantum-Vulnerable Certificate Key: {auth_label}",
+                "detail": (
+                    f"The server certificate uses a {auth_label} public key, read directly from the "
+                    f"presented certificate. {auth_algo} signatures are forgeable via Shor's algorithm on a CRQC."
+                ),
+                "recommendation": "Migrate the certificate to ML-DSA (FIPS 204) or a hybrid classical+PQC chain once your CA supports it.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(auth_qvs)
+        elif auth_algo == "Unknown":
+            findings.append({
+                "severity": "info",
+                "issue": "Certificate Key Algorithm Undetermined",
+                "detail": "The certificate public key could not be parsed, so no signature-algorithm risk is claimed for this host.",
+                "recommendation": "Verify the `cryptography` package is installed so certificate keys can be inspected.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
 
         # Check TLS version
         if tls_version and tls_version < "TLSv1.3":
@@ -163,241 +379,482 @@ def _scan_web_tls(web_url: str) -> dict:
                 "issue": f"Legacy TLS Version: {tls_version}",
                 "detail": "TLS 1.2 and below do not support hybrid PQC key exchange groups. Upgrade required for quantum readiness.",
                 "recommendation": "Enforce TLS 1.3 minimum. Configure server to prefer PQC-hybrid cipher suites.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
 
     except Exception as e:
+        # The host could not be probed. Report that and nothing else — no cryptographic
+        # claim is made about a host we never reached.
         findings.append({
-            "severity": "high",
-            "issue": "TLS Connection Failed",
-            "detail": f"Could not perform TLS handshake with {web_url}: {str(e)}. Using deterministic risk assessment based on common banking infrastructure defaults.",
-            "recommendation": "Verify endpoint availability and firewall rules. Meanwhile, risk is assessed as HIGH based on typical RSA-2048 deployment patterns.",
+            "severity": "info",
+            "issue": "TLS Probe Failed — Host Not Assessed",
+            "detail": f"Could not complete a TLS handshake with {web_url}: {str(e)}. No cryptographic findings are reported for this host because none were observed.",
+            "recommendation": "Verify endpoint availability, DNS resolution and firewall rules, then re-run the scan.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
-        # Default risk assessment for unreachable hosts
-        pillar_qvs_scores.append(100)
+        return {"findings": findings, "qvs": None, "scanned": False,
+                "error": str(e), "evidence_summary": _evidence_summary(findings)}
 
-        findings.append({
-            "severity": "critical",
-            "issue": "Assumed RSA-2048 Certificate (Industry Default)",
-            "detail": "Most banking web portals deploy RSA-2048 certificates via AWS ACM or DigiCert. RSA-2048 is fully vulnerable to Shor's algorithm on a CRQC (Cryptographically Relevant Quantum Computer).",
-            "recommendation": "Update Nginx ssl_ciphers to support FIPS 203 (ML-KEM). Migrate certificate to ML-DSA or hybrid RSA+ML-KEM.",
-        })
-        pillar_qvs_scores.append(100)
-
-        findings.append({
-            "severity": "high",
-            "issue": "Classical ECDHE Key Exchange Assumed",
-            "detail": "Standard ECDHE (P-256) key exchange does not provide quantum-safe forward secrecy. Session data can be recorded and decrypted post-quantum.",
-            "recommendation": "Enable X25519MLKEM768 hybrid key exchange in TLS 1.3 configuration.",
-        })
-        pillar_qvs_scores.append(85)
-
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 100
-    return {"findings": findings, "qvs": avg_qvs}
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
+    return {"findings": findings, "qvs": avg_qvs, "scanned": True,
+            "handshake_ms": handshake_ms, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar B: VPN/TLS Engine ─────────────────────────────────────────────────
 
 def _scan_vpn_tls(vpn_url: str) -> dict:
     """
-    Deterministic VPN gateway protocol analysis.
-    In production this would probe VPN ports (443/UDP for AnyConnect, 1194 for OpenVPN).
-    For the prototype, we perform deterministic analysis based on common enterprise patterns.
+    Real TLS handshake + IKEv2 port probing on VPN gateways.
+    Detects cipher suite, cert CN/SAN, TLS version, and VPN vendor.
     """
     findings = []
     pillar_qvs_scores = []
-    target = vpn_url or "vpn.target.bank.in"
 
-    # Detection 1: VPN Protocol Identification
-    findings.append({
-        "severity": "info",
-        "issue": "VPN Gateway Detected: SSL-VPN / Cisco AnyConnect",
-        "detail": f"Probing {target} on port 443/TCP identified an enterprise SSL-VPN gateway. Protocol markers consistent with Cisco AnyConnect or OpenVPN over TLS.",
-        "recommendation": None,
-    })
+    parsed = urlparse(vpn_url if vpn_url.startswith("http") else f"https://{vpn_url}")
+    host = parsed.hostname or vpn_url
 
-    # Detection 2: IKEv1/RSA Authentication
-    findings.append({
-        "severity": "critical",
-        "issue": "Quantum-Vulnerable VPN Authentication: IKEv1 with RSA-2048",
-        "detail": f"Gateway {target} uses IKEv1 Phase-1 with RSA-2048 authentication. RSA key exchange in IKE allows full tunnel compromise via Shor's algorithm. An attacker recording the tunnel today can decrypt all administrative access to the entire internal network post-quantum.",
-        "recommendation": "Upgrade to IKEv2 with RFC 9370 (Multiple Key Exchanges for PQC). Apply vendor firmware patches for hybrid PQC key exchange.",
-    })
-    pillar_qvs_scores.append(_qvs("IKEv1-RSA"))
+    # 1. Full TLS handshake on port 443
+    tls_info = _get_tls_info(vpn_url)
 
-    # Detection 3: Cipher Suite for Tunnel
-    findings.append({
-        "severity": "high",
-        "issue": "Tunnel Cipher: AES-256-CBC with ECDHE Key Exchange",
-        "detail": "VPN data tunnel uses AES-256-CBC with classical ECDHE for key material derivation. While AES-256 is quantum-resistant for symmetric encryption, the ECDHE key exchange is vulnerable to quantum key recovery.",
-        "recommendation": "Upgrade to OQS (Open Quantum Safe) OpenVPN fork, or enable ML-KEM-768 hybrid key exchange on the VPN appliance.",
-    })
-    pillar_qvs_scores.append(_qvs("ECDHE"))
+    # 2. IKEv2 port probes (500, 4500)
+    ikev2_responsive = False
+    for port in [500, 4500]:
+        try:
+            with socket.create_connection((host, port), timeout=3) as sock:
+                ikev2_responsive = True
+                break
+        except OSError as e:
+            log.debug("IKEv2 port %s not responsive on %s: %s", port, host, e)
+            continue
 
-    # Detection 4: RFC 9370 Support
-    findings.append({
-        "severity": "high",
-        "issue": "RFC 9370 (PQC Key Exchange) Not Supported",
-        "detail": f"Gateway {target} does not advertise support for RFC 9370 Multiple Key Exchanges in IKEv2. No PQC key exchange groups detected in the SA payload.",
-        "recommendation": "Apply vendor firmware update to enable RFC 9370 hybrid PQC key exchange. For Cisco: upgrade to IOS XE 17.12+. For strongSwan: upgrade to 5.9.12+ with liboqs.",
-    })
-    pillar_qvs_scores.append(95)
+    # 3. VPN vendor heuristic from cert CN/SAN
+    vpn_keywords = {
+        "anyconnect": "Cisco AnyConnect SSL-VPN", "cisco": "Cisco SSL-VPN",
+        "globalprotect": "Palo Alto GlobalProtect", "fortigate": "Fortinet FortiGate",
+        "fortinet": "Fortinet SSL-VPN", "sonicwall": "SonicWall SSL-VPN",
+        "vpn": "SSL-VPN Gateway", "remote": "Remote Access Gateway",
+    }
+    detected_vpn = "Unknown"
+    vendor_from_keyword = False
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 95
-    return {"findings": findings, "qvs": avg_qvs}
+    if tls_info["reachable"]:
+        search_str = f"{tls_info['cn']} {' '.join(tls_info.get('sans', []))}".lower()
+        for keyword, label in vpn_keywords.items():
+            if keyword in search_str:
+                detected_vpn = label
+                vendor_from_keyword = True
+                break
+        if detected_vpn == "Unknown":
+            detected_vpn = "IPsec (IKEv2) Gateway" if ikev2_responsive else "TLS Gateway (VPN type unconfirmed)"
+
+        findings.append({
+            "severity": "info",
+            "issue": f"VPN Gateway Identified: {detected_vpn}",
+            "detail": f"TLS handshake with {host}:443 — CN: {tls_info['cn']} | Cipher: {tls_info['cipher_name']} ({tls_info['cipher_bits']}-bit) | TLS: {tls_info['tls_version']}",
+            "recommendation": None,
+            "evidence": "inferred" if vendor_from_keyword else "measured",
+            "inferred_from": "keyword match on cert CN/SAN" if vendor_from_keyword else None,
+        })
+
+        kx = tls_info["key_exchange"]
+        kx_qvs = _qvs(kx)
+
+        if kx in ["RSA", "DHE"]:
+            findings.append({
+                "severity": "critical",
+                "issue": f"Quantum-Vulnerable VPN Key Exchange: {kx}",
+                "detail": f"VPN tunnel uses {kx} key exchange ({tls_info['cipher_name']}). HNDL attack: encrypted VPN traffic recorded today is decryptable post-quantum.",
+                "recommendation": "Upgrade to RFC 9370 compliant firmware. Enable hybrid PQC key exchange (ML-KEM + X25519).",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(kx_qvs)
+        elif kx == "ECDHE":
+            findings.append({
+                "severity": "high",
+                "issue": f"Classical VPN Key Exchange: {kx} (Quantum-Vulnerable)",
+                "detail": f"VPN tunnel uses {kx} ({tls_info['cipher_name']}). Forward secrecy against classical computers, but vulnerable to Shor's algorithm.",
+                "recommendation": "Enable hybrid X25519MLKEM768 key exchange. For IKEv2: enable RFC 9370 Multiple Key Exchanges.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(kx_qvs)
+        elif "MLKEM" in tls_info["cipher_name"].upper() or "KYBER" in tls_info["cipher_name"].upper():
+            findings.append({
+                "severity": "info",
+                "issue": "PQC-Hybrid Key Exchange Detected on VPN",
+                "detail": f"VPN gateway supports hybrid PQC: {tls_info['cipher_name']}. Quantum-resistant forward secrecy is active.",
+                "recommendation": None,
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(20)
+
+        if tls_info["tls_version"] and tls_info["tls_version"] < "TLSv1.3":
+            findings.append({
+                "severity": "high",
+                "issue": f"Legacy TLS on VPN: {tls_info['tls_version']}",
+                "detail": f"VPN negotiated {tls_info['tls_version']}. TLS 1.2 and below cannot support hybrid PQC cipher suites.",
+                "recommendation": "Enforce TLS 1.3 minimum on the VPN gateway.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(95)
+
+        if ikev2_responsive:
+            findings.append({
+                "severity": "high",
+                "issue": "IKEv2 Gateway Detected (Classical Mode)",
+                "detail": f"Ports 500/4500 responsive on {host}. No IKE_INTERMEDIATE exchange (RFC 9242) support could be verified remotely.",
+                "recommendation": "Enable RFC 9370 Multiple Key Exchanges for hybrid PQC security in IKEv2.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(95)
+    else:
+        findings.append({
+            "severity": "info",
+            "issue": "VPN Gateway Unreachable",
+            "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. VPN cryptographic posture could not be assessed.",
+            "recommendation": "Verify VPN gateway availability. Provide VPN configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        if ikev2_responsive:
+            findings.append({
+                "severity": "high",
+                "issue": "IKEv2 Ports Responsive (No TLS Handshake)",
+                "detail": f"IKEv2 ports (500/4500) on {host} are responsive but TLS handshake failed. Likely pure IPsec without SSL-VPN.",
+                "recommendation": "Enable RFC 9370 Multiple Key Exchanges for hybrid PQC security.",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(95)
+        else:
+            pillar_qvs_scores.append(75)
+
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar C: API Security Engine ────────────────────────────────────────────
 
+# NIST PQC OIDs for JWT/JOSE
+PQC_OIDS = {
+    "2.16.840.1.101.3.4.3.17": "ML-DSA-44",
+    "2.16.840.1.101.3.4.3.18": "ML-DSA-65",
+    "2.16.840.1.101.3.4.3.19": "ML-DSA-87",
+}
+
 def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
     """
-    Deterministic API security analysis: JWT signing algorithm + mTLS check.
+    Perform deep analysis of JWT tokens for PQC OIDs and mTLS status.
     """
     findings = []
     pillar_qvs_scores = []
-    target = api_url or "api.target.bank.in"
-
-    # mTLS Transport Layer Check (simulated for prototype)
-    findings.append({
-        "severity": "high",
-        "issue": "mTLS Transport: ECDSA-P256 Client Certificates",
-        "detail": f"API endpoint {target} uses mutual TLS with ECDSA-P256 client certificates for B2B authentication. ECC-based mTLS is vulnerable to quantum factoring.",
-        "recommendation": "Transition mTLS certificates from ECDSA-P256 to ML-DSA-65 or hybrid ECDSA+ML-DSA certificates.",
-    })
-    pillar_qvs_scores.append(_qvs("ECDSA-P256"))
-
-    # JWT Token Analysis
-    if jwt_token and jwt_token.strip():
-        try:
-            parts = jwt_token.strip().split(".")
-            if len(parts) >= 2:
-                # Decode JWT header (add padding)
-                header_b64 = parts[0]
-                header_b64 += "=" * (4 - len(header_b64) % 4)
-                header = json.loads(base64.urlsafe_b64decode(header_b64))
-                alg = header.get("alg", "Unknown")
-                typ = header.get("typ", "JWT")
-
-                qvs = _qvs(alg)
-                pillar_qvs_scores.append(qvs)
-
-                if alg in ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512"):
-                    findings.append({
-                        "severity": "critical",
-                        "issue": f"JWT Signing Algorithm: {alg} (RSA-Based)",
-                        "detail": f"Token header specifies \"{alg}\" ({typ}). RSA signatures are quantum-forgeable via Shor's algorithm. An attacker with a CRQC could forge valid API tokens, impersonating any authenticated user or service.",
-                        "recommendation": "Transition JWT signing algorithm from RSA-based signatures to FIPS 204 (ML-DSA-65). Update all API consumers to verify ML-DSA signatures.",
-                    })
-                elif alg in ("ES256", "ES384", "ES512"):
+    
+    # 1. mTLS Detection
+    try:
+        parsed = urlparse(api_url if api_url.startswith("http") else f"https://{api_url}")
+        host = parsed.hostname or api_url
+        context = ssl.create_default_context()
+        with socket.create_connection((host, 443), timeout=3) as sock:
+            try:
+                with context.wrap_socket(sock, server_hostname=host) as tls_sock:
+                    pass # Success without client cert -> strict mTLS not enforced
+            except ssl.SSLError as e:
+                err_str = str(e).lower()
+                if "certificate required" in err_str or "bad certificate" in err_str or "handshake failure" in err_str:
                     findings.append({
                         "severity": "high",
-                        "issue": f"JWT Signing Algorithm: {alg} (ECC-Based)",
-                        "detail": f"Token header specifies \"{alg}\" ({typ}). ECDSA signatures are quantum-vulnerable. Shor's algorithm can recover the private signing key.",
-                        "recommendation": "Transition JWT signing from ECDSA to FIPS 204 (ML-DSA-65) or hybrid ECDSA+ML-DSA.",
+                        "issue": "Classical mTLS Enforced",
+                        "detail": "API enforces mutual TLS, typically utilizing classical RSA/ECDSA. These are vulnerable to Shor's algorithm.",
+                        "recommendation": "Transition to FIPS 204 (ML-DSA) certificates for B2B mTLS channels.",
+                        "evidence": "measured",
+                        "inferred_from": None,
                     })
-                else:
-                    findings.append({
-                        "severity": "medium",
-                        "issue": f"JWT Signing Algorithm: {alg}",
-                        "detail": f"Token uses algorithm \"{alg}\". Evaluate PQC readiness for this signing scheme.",
-                        "recommendation": "Monitor NIST PQC standardization for signature algorithm updates. Consider migration to ML-DSA.",
-                    })
-            else:
-                raise ValueError("Token does not have 3 parts")
-        except Exception:
-            findings.append({
-                "severity": "medium",
-                "issue": "Invalid JWT Format",
-                "detail": "Could not parse the provided token. Ensure a valid base64-encoded JWT with header.payload.signature format.",
-                "recommendation": "Provide a valid JWT token for accurate signing-algorithm analysis.",
-            })
-            pillar_qvs_scores.append(75)
-    else:
-        # No token provided — assume RS256 (industry default for banking APIs)
-        findings.append({
-            "severity": "high",
-            "issue": "No JWT Token Provided — Assumed RS256",
-            "detail": "No sample token was provided for analysis. Banking APIs overwhelmingly use RS256 (RSA-2048 SHA-256) for JWT signing, which is fully quantum-vulnerable.",
-            "recommendation": "Provide a sample JWT/OAuth token for precise analysis. Transition to FIPS 204 (ML-DSA-65).",
-        })
-        pillar_qvs_scores.append(100)
+                    pillar_qvs_scores.append(85)
+    except (OSError, ssl.SSLError) as e:
+        log.debug("mTLS probe failed for %s: %s", api_url, e)
+
+    # 2. JWT Analysis
+    if jwt_token and "." in jwt_token:
+        try:
+            parts = jwt_token.split(".")
+            header_b64 = parts[0]
+            header_b64 += "=" * (4 - len(header_b64) % 4)
+            header = json.loads(base64.urlsafe_b64decode(header_b64))
+            
+            alg = header.get("alg", "Unknown")
+            oid = header.get("oid", None) # Some PQC implementations use OID in header
+
+            if oid in PQC_OIDS:
+                findings.append({
+                    "severity": "info",
+                    "issue": f"PQC-Ready JWT Signature: {PQC_OIDS[oid]}",
+                    "detail": "Token header contains valid NIST PQC Object Identifier (OID).",
+                    "recommendation": None,
+                    "evidence": "measured",
+                    "inferred_from": None,
+                })
+                pillar_qvs_scores.append(0)
+            elif alg in ["RS256", "RS384", "ES256", "ES384"]:
+                findings.append({
+                    "severity": "critical",
+                    "issue": f"Quantum-Vulnerable JWT Algorithm: {alg}",
+                    "detail": f"Standard {alg} signature can be forged using Shor's algorithm on a post-quantum computer.",
+                    "recommendation": "Migrate JWT signing to ML-DSA-65 (FIPS 204).",
+                    "evidence": "measured",
+                    "inferred_from": None,
+                })
+                pillar_qvs_scores.append(100)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError) as e:
+            log.debug("Could not parse JWT header for %s: %s", api_url, e)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 90
-    return {"findings": findings, "qvs": avg_qvs}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar D: Firmware Integrity Engine ───────────────────────────────────────
 
 def _scan_firmware(target: str) -> dict:
     """
-    Deterministic firmware integrity assessment.
-    Checks for XMSS/LMS stateful hash-based signature support.
+    Firmware integrity assessment via real TLS infrastructure analysis.
+    Infers firmware signing scheme from the organization's observed PKI.
+    Probes for exposed firmware update endpoints.
     """
     findings = []
     pillar_qvs_scores = []
 
-    findings.append({
-        "severity": "info",
-        "issue": "Firmware Signing Scheme Detected: RSA-2048 Code Signing",
-        "detail": f"System firmware on {target} infrastructure uses RSA-2048 code-signing certificates for secure boot and update verification. RSA-2048 signatures are forgeable via Shor's algorithm.",
-        "recommendation": None,
-    })
+    parsed = urlparse(target if target.startswith("http") else f"https://{target}")
+    host = parsed.hostname or target
 
-    findings.append({
-        "severity": "critical",
-        "issue": "Quantum-Vulnerable Firmware Signing: RSA-2048",
-        "detail": "Firmware update packages signed with RSA-2048. A quantum attacker could forge firmware signatures and deploy malicious updates to ATMs, core banking servers, and network appliances.",
-        "recommendation": "Migrate firmware signing to XMSS (RFC 8391) or LMS (RFC 8554) stateful hash-based signatures per NIST SP 800-208.",
-    })
-    pillar_qvs_scores.append(100)
+    # 1. TLS probe to infer organizational PKI
+    tls_info = _get_tls_info(target)
 
-    findings.append({
-        "severity": "high",
-        "issue": "No XMSS/LMS State Counter Detected",
-        "detail": "XMSS/LMS require strict one-time-use state management. No state counter infrastructure detected. Deploying XMSS without state tracking risks catastrophic key reuse.",
-        "recommendation": "Implement HSM-backed state counter (e.g., AWS CloudHSM or Thales Luna) before deploying XMSS/LMS firmware signing.",
-    })
-    pillar_qvs_scores.append(95)
+    # 2. Probe for firmware update endpoints
+    fw_endpoints = []
+    for path in ["/firmware", "/update", "/ota", "/.well-known/security.txt", "/fwupdate", "/api/firmware"]:
+        try:
+            req = urllib.request.Request(
+                f"https://{host}{path}", method="HEAD",
+                headers={"User-Agent": "QuantumShield-Scanner/2.0"},
+            )
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status < 400:
+                    fw_endpoints.append(path)
+        except (urllib.error.URLError, OSError) as e:
+            log.debug("Firmware endpoint probe failed for %s%s: %s", host, path, e)
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 100
-    return {"findings": findings, "qvs": avg_qvs}
+    # 3. Generate findings from real observations
+    if tls_info["reachable"]:
+        auth_algo = tls_info["auth_algo"]
+        algo_label = f"{auth_algo} ({tls_info['cipher_bits']}-bit)" if tls_info["cipher_bits"] else auth_algo
+        algo_qvs = _qvs(auth_algo)
+
+        findings.append({
+            "severity": "info",
+            "issue": f"Infrastructure PKI Algorithm Observed: {algo_label}",
+            "detail": f"TLS certificate on {host} uses {auth_algo} (Cipher: {tls_info['cipher_name']}). Issuer: {tls_info['issuer_org']}. Organizations typically use consistent PKI across TLS and firmware code-signing.",
+            "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+
+        if auth_algo == "RSA":
+            findings.append({
+                "severity": "critical",
+                "issue": f"Quantum-Vulnerable Firmware Signing Inferred: {auth_algo}",
+                "detail": f"[Inferred from observed PKI] Infrastructure uses {auth_algo} certificates. Standard practice uses the same CA hierarchy for firmware code-signing. {auth_algo} signatures are forgeable via Shor's algorithm on a CRQC.",
+                "recommendation": "Migrate firmware signing to XMSS (RFC 8391) or LMS (RFC 8554) per NIST SP 800-208.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
+            })
+            pillar_qvs_scores.append(algo_qvs)
+        elif auth_algo == "ECDSA":
+            findings.append({
+                "severity": "high",
+                "issue": f"Quantum-Vulnerable Firmware Signing Inferred: {auth_algo}",
+                "detail": f"[Inferred from observed PKI] Infrastructure uses {auth_algo} certificates. ECDSA signatures are vulnerable to Shor's algorithm, with slightly higher quantum resource requirements than RSA.",
+                "recommendation": "Migrate firmware signing to XMSS (RFC 8391) or LMS (RFC 8554) per NIST SP 800-208.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
+            })
+            pillar_qvs_scores.append(algo_qvs)
+        else:
+            findings.append({
+                "severity": "medium",
+                "issue": f"Firmware Signing Algorithm: {auth_algo}",
+                "detail": f"[Inferred from observed PKI] Non-standard algorithm detected. Manual review recommended.",
+                "recommendation": "Review firmware signing certificates directly.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
+            })
+            pillar_qvs_scores.append(50)
+
+        findings.append({
+            "severity": "high",
+            "issue": "No XMSS/LMS State Counter Detected",
+            "detail": "XMSS/LMS require strict one-time-use state management. No evidence of stateful hash-based signature infrastructure detected via remote probing.",
+            "recommendation": "Implement HSM-backed state counter (e.g., AWS CloudHSM or Thales Luna) before deploying XMSS/LMS.",
+            "evidence": "inferred",
+            "inferred_from": "no firmware image was inspected; no dedicated state-counter probe exists",
+        })
+        pillar_qvs_scores.append(min(algo_qvs + 5, 100))
+    else:
+        findings.append({
+            "severity": "info",
+            "issue": "Firmware Assessment: Target Unreachable",
+            "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. Firmware signing posture could not be assessed remotely.",
+            "recommendation": "Provide internal firmware signing certificates or HSM configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        pillar_qvs_scores.append(75)
+
+    if fw_endpoints:
+        findings.append({
+            "severity": "high",
+            "issue": f"Firmware Update Endpoints Exposed: {', '.join(fw_endpoints)}",
+            "detail": f"Publicly accessible firmware paths detected on {host}. Exposed endpoints increase supply-chain attack surface.",
+            "recommendation": "Restrict firmware update endpoints to internal networks or require mutual TLS.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        pillar_qvs_scores.append(95)
+
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar E: Archival Encryption Engine ──────────────────────────────────────
 
 def _scan_archival(target: str) -> dict:
     """
-    Deterministic assessment of long-term archival encryption.
-    Checks for BIKE/HQC code-based KEM support.
+    Archival encryption assessment via real TLS key exchange analysis
+    and cloud storage encryption header detection.
     """
     findings = []
     pillar_qvs_scores = []
 
-    findings.append({
-        "severity": "info",
-        "issue": "Archival Encryption Scheme Detected: AES-256-GCM + RSA-2048 Key Wrapping",
-        "detail": f"Long-term banking data archives on {target} use AES-256-GCM for symmetric encryption with RSA-2048 key wrapping. AES-256 is quantum-resistant, but the RSA key wrap is vulnerable to Shor's algorithm.",
-        "recommendation": None,
-    })
+    parsed = urlparse(target if target.startswith("http") else f"https://{target}")
+    host = parsed.hostname or target
 
-    findings.append({
-        "severity": "high",
-        "issue": "Quantum-Vulnerable Key Wrapping: RSA-2048",
-        "detail": "Archival data encrypted with AES-256 but wrapped with RSA-2048 keys. Harvest-Now-Decrypt-Later (HNDL) attack can recover symmetrickeys from archived key-wrap envelopes post-quantum.",
-        "recommendation": "Migrate key wrapping to BIKE-L1 or HQC-128 code-based KEMs for 25+ year archival confidentiality. BIKE/HQC are NIST Round-4 candidates providing cryptographic diversity beyond lattice assumptions.",
-    })
-    pillar_qvs_scores.append(100)
+    # 1. TLS probe for key exchange algorithm
+    tls_info = _get_tls_info(target)
 
-    findings.append({
-        "severity": "medium",
-        "issue": "No Code-Based KEM (BIKE/HQC) Support Detected",
-        "detail": "No BIKE or HQC library integration found in archival encryption pipeline. SWIFT message logs and regulatory audit trails require quantum-safe key encapsulation for long-term confidentiality.",
-        "recommendation": "Integrate liboqs BIKE-L1 or HQC-128 into the archival encryption pipeline. Re-encrypt existing key-wrap envelopes during scheduled maintenance windows.",
-    })
-    pillar_qvs_scores.append(90)
+    # 2. HTTP probe for cloud storage encryption headers
+    storage_headers = {}
+    enc_header_names = [
+        "x-amz-server-side-encryption", "x-amz-server-side-encryption-aws-kms-key-id",
+        "x-ms-server-encrypted", "x-ms-encryption-key-sha256",
+        "x-goog-encryption-algorithm", "x-goog-encryption-kms-key-name",
+    ]
+    try:
+        req = urllib.request.Request(
+            f"https://{host}/", method="HEAD",
+            headers={"User-Agent": "QuantumShield-Scanner/2.0"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            for h in enc_header_names:
+                val = resp.headers.get(h)
+                if val:
+                    storage_headers[h] = val
+    except (urllib.error.URLError, OSError) as e:
+        log.debug("Storage encryption header probe failed for %s: %s", host, e)
 
-    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 95
-    return {"findings": findings, "qvs": avg_qvs}
+    # 3. Generate findings based on real observations
+    if tls_info["reachable"]:
+        kx = tls_info["key_exchange"]
+        kx_display = f"{kx} ({tls_info['cipher_name']})"
+        kx_qvs = _qvs(kx)
+
+        findings.append({
+            "severity": "info",
+            "issue": f"Key Exchange Algorithm Observed: {kx_display}",
+            "detail": f"TLS connection to {host} uses {kx} key exchange. Organizations typically use the same key exchange/wrapping algorithms across TLS and archival encryption.",
+            "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+
+        if kx == "RSA":
+            findings.append({
+                "severity": "high",
+                "issue": f"Quantum-Vulnerable Key Wrapping Inferred: {kx}",
+                "detail": f"[Inferred from observed key exchange] Archival data likely wrapped with {kx} keys. HNDL attacks can recover symmetric keys from archived key-wrap envelopes post-quantum.",
+                "recommendation": "Migrate key wrapping to BIKE-L1 or HQC-128 code-based KEMs for 25+ year archival confidentiality.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
+            })
+            pillar_qvs_scores.append(kx_qvs)
+        elif kx in ["ECDHE", "DHE"]:
+            findings.append({
+                "severity": "high",
+                "issue": f"Classical Key Exchange for Archival: {kx}",
+                "detail": f"[Inferred from observed key exchange] {kx} provides forward secrecy but is vulnerable to Shor's algorithm. Archived key-wrap envelopes at risk post-quantum.",
+                "recommendation": "Migrate key wrapping to BIKE-L1 or HQC-128 for long-term archival confidentiality.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
+            })
+            pillar_qvs_scores.append(kx_qvs)
+        elif "MLKEM" in tls_info["cipher_name"].upper() or "KYBER" in tls_info["cipher_name"].upper():
+            findings.append({
+                "severity": "info",
+                "issue": "PQC-Ready Key Exchange Detected",
+                "detail": f"Hybrid PQC key exchange ({tls_info['cipher_name']}) observed. Long-term archival confidentiality is quantum-resistant if same infrastructure is used.",
+                "recommendation": None,
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
+            })
+            pillar_qvs_scores.append(20)
+        else:
+            findings.append({
+                "severity": "medium",
+                "issue": f"Archival Key Wrapping Assessment: {kx}",
+                "detail": f"Key exchange {kx} detected. Quantum risk requires further analysis.",
+                "recommendation": "Review archival encryption configuration directly.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
+            })
+            pillar_qvs_scores.append(50)
+
+        findings.append({
+            "severity": "medium",
+            "issue": "No Code-Based KEM (BIKE/HQC) Support Detected",
+            "detail": f"No BIKE or HQC markers in TLS negotiation with {host}. BIKE/HQC provide cryptographic diversity for long-term archival.",
+            "recommendation": "Integrate liboqs BIKE-L1 or HQC-128 into the archival encryption pipeline for 25+ year confidentiality.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        pillar_qvs_scores.append(min(kx_qvs, 90))
+    else:
+        findings.append({
+            "severity": "info",
+            "issue": "Archival Assessment: Target Unreachable",
+            "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. Archival encryption posture could not be assessed remotely.",
+            "recommendation": "Provide archival encryption configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        pillar_qvs_scores.append(75)
+
+    for header, value in storage_headers.items():
+        cloud = "AWS" if "amz" in header else "Azure" if "ms" in header else "GCP"
+        findings.append({
+            "severity": "info",
+            "issue": f"Cloud Storage Encryption Detected ({cloud})",
+            "detail": f"Header `{header}: {value}` indicates server-side encryption is active.",
+            "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+
+    avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -416,26 +873,77 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
     firmware_result = _scan_firmware(web_url)
     archival_result = _scan_archival(web_url)
 
-    # Overall QVS = weighted average of five pillars
-    overall_qvs = round(
-        (web_result["qvs"] + vpn_result["qvs"] + api_result["qvs"]
-         + firmware_result["qvs"] + archival_result["qvs"]) / 5
-    )
+    # Overall QVS = unweighted mean of the pillars that were actually assessed.
+    # Pillars that could not be probed contribute nothing rather than a default score.
+    scored = [r["qvs"] for r in (web_result, vpn_result, api_result,
+                                 firmware_result, archival_result)
+              if r.get("qvs") is not None]
+    overall_qvs = round(sum(scored) / len(scored)) if scored else None
 
-    # ── ML Selector: recommend optimal algorithm per pillar ──
+    # ── PQC Selector: recommend an algorithm per pillar ──
+    # Latency is the measured TLS handshake round-trip where a probe succeeded.
+    # Bandwidth is not observable from a TLS handshake, so a documented default is
+    # used and labelled as an assumption rather than presented as a measurement.
+    measured_latency_ms = web_result.get("handshake_ms")
+    ASSUMED_BANDWIDTH_KBPS = 50000  # assumption, not measured — see selector_inputs below
+
     selector_results = {}
-    for pillar_key, pillar_name in [("web", "Web"), ("vpn", "VPN"), ("api", "API"),
-                                     ("firmware", "Firmware"), ("archival", "Archival")]:
-        selection = ml_select(pillar=pillar_name, bandwidth_kbps=50000,
-                              latency_ms=10, device_type="Server")
+    for pillar_key, pillar_name, device_type in [
+        ("web", "Web", "Server"),
+        ("vpn", "VPN", "Server"),
+        ("api", "API", "Server"),
+        ("firmware", "Firmware", "IoT"),
+        ("archival", "Archival", "Server"),
+    ]:
+        latency_ms = measured_latency_ms if measured_latency_ms is not None else 10
+        selection = ml_select(pillar=pillar_name,
+                              bandwidth_kbps=ASSUMED_BANDWIDTH_KBPS,
+                              latency_ms=latency_ms,
+                              device_type=device_type)
         selector_results[pillar_key] = {
             "algorithm": selection["algorithm"],
             "confidence": selection["confidence"],
             "selector_log": selection["selector_log"],
+            "inputs": {
+                "latency_ms": latency_ms,
+                "latency_source": "measured TLS handshake" if measured_latency_ms is not None else "default (no successful probe)",
+                "bandwidth_kbps": ASSUMED_BANDWIDTH_KBPS,
+                "bandwidth_source": "assumed — not measurable from a TLS handshake",
+                "device_type": device_type,
+                "device_type_source": "assumed from pillar",
+            },
         }
 
     # ── PQC Audit Table ──
     audit_table = generate_audit_table()
+
+    # ── API Metrics: Dynamically derived from the scan findings ──
+    api_findings = api_result.get("findings", [])
+    
+    # Base metrics
+    api_metrics = {
+        "total": len(api_findings),
+        "discovered": sum(1 for f in api_findings if f["severity"] == "info"),
+        "buckets": {
+            "REST Endpoints": 0,
+            "JWT Audit": 0,
+            "mTLS Layer": 0
+        },
+        "quantumRisk": {
+            "vulnerable": sum(1 for f in api_findings if f["severity"] in ["critical", "high", "medium"]),
+            "pqc_ready": sum(1 for f in api_findings if "PQC-Ready" in f["issue"])
+        }
+    }
+
+    # Populate buckets based on finding content
+    for f in api_findings:
+        issue = f["issue"].upper()
+        if "JWT" in issue:
+            api_metrics["buckets"]["JWT Audit"] += 1
+        elif "MTLS" in issue:
+            api_metrics["buckets"]["mTLS Layer"] += 1
+        else:
+            api_metrics["buckets"]["REST Endpoints"] += 1
 
     return {
         "timestamp": datetime.utcnow().isoformat(),
@@ -455,6 +963,9 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
             "archival": archival_result["qvs"],
             "overall": overall_qvs,
         },
+        # null in riskScores means "not assessed", not "no risk".
+        "pillarsAssessed": len(scored),
         "selectorLog": selector_results,
         "pqcAuditTable": audit_table,
+        "apiMetrics": api_metrics,
     }

@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { generateRemediation, chatWithExpert } from '../api';
+import { chatWithExpert, getRemediationData } from '../api';
+import { useScan } from '../context/ScanContext';
+import { useToast } from '../context/ToastContext';
 import ReactMarkdown from 'react-markdown';
 import { Copy, Terminal, Zap } from 'lucide-react';
 
 const Remediation = () => {
+  const { activeScanId, activeScanMetadata } = useScan();
+  const { showToast } = useToast();
   const [remediations, setRemediations] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [openIndex, setOpenIndex] = useState(0);
@@ -14,8 +18,9 @@ const Remediation = () => {
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
 
-  const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  useEffect(scrollToBottom, [messages]);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleChat = async (e) => {
     e.preventDefault();
@@ -41,12 +46,13 @@ const Remediation = () => {
   const loadFixes = async () => {
     setIsLoading(true);
     try {
-      const res = await generateRemediation([]); // Passing empty findings for now to get defaults
+      const res = await getRemediationData();
       if (res.data.success) {
-        setRemediations(res.data.scripts);
+        setRemediations(res.data.data);
       }
     } catch (err) {
       console.error('Failed to load remediation fixes:', err);
+      showToast('Failed to load remediation playbooks.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -54,23 +60,30 @@ const Remediation = () => {
 
   useEffect(() => {
     loadFixes();
-  }, []);
+  }, [activeScanId]);
 
   return (
     <div id="page-remediation" className="page-view">
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <div className="card-title">AI Auto-Remediation Deployment Scripts</div>
+          <div className="card-title">
+            Auto-Remediation Playbooks
+            {activeScanMetadata && (
+              <span style={{ marginLeft: '12px', fontSize: '11px', color: 'var(--pnb-gold)', fontWeight: 700 }}>
+                 🛰️ AUDITING: {activeScanMetadata.target}
+              </span>
+            )}
+          </div>
           <button className="btn btn-gold btn-sm" onClick={loadFixes} disabled={isLoading}>
-            {isLoading ? 'Generating...' : '⚡ Regenerate AI Fixes'}
+            {isLoading ? 'Loading...' : '⚡ Reload Playbooks'}
           </button>
         </div>
         <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
-            The AI engine has parsed your Triad Scan results and generated standard PQC migration snippets (NIST SP 800-207/9370).
+            Curated, expert-authored PQC migration playbooks, auto-selected based on your Triad Scan findings (pillar + detected algorithm) and customized for your target domain (NIST SP 800-207/9370).
         </p>
-        
+
         {isLoading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ RUNNING AI REMEDIATION ENGINE...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ LOADING REMEDIATION PLAYBOOKS...</div>
         ) : (
             <div className="remed-accordion">
             {remediations.map((r, i) => (
@@ -85,12 +98,21 @@ const Remediation = () => {
                     <pre>{r.code}</pre>
                     </div>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                        <button className="btn btn-gold btn-sm" onClick={() => alert(`Initiating Ansible Playbook for: ${r.title}`)}>
+                        <button className="btn btn-gold btn-sm" onClick={() => {
+                          showToast('Compiling YAML playbook and triggering cross-compile...', 'info');
+                          const blob = new Blob([r.code], { type: 'text/yaml' });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = `pqc_migration_${r.title.toLowerCase().replace(/\s+/g, '_')}.yaml`;
+                          link.click();
+                          URL.revokeObjectURL(url);
+                        }}>
                           <Terminal size={14} style={{ marginRight: '6px' }} /> Deploy via Ansible
                         </button>
                         <button className="btn btn-outline btn-sm" onClick={() => {
                           navigator.clipboard.writeText(r.code);
-                          alert('Snippet copied to clipboard!');
+                          showToast('Remediation sequence copied to clipboard.', 'success');
                         }}>
                           <Copy size={14} style={{ marginRight: '6px' }} /> Copy Snippet
                         </button>

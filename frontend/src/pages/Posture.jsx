@@ -1,14 +1,26 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useScan } from '../context/ScanContext';
 
 const Posture = () => {
   const navigate = useNavigate();
-  
+  const { activeData } = useScan();
+
+  const qvs = activeData?.riskScores?.overall;
+  // Do not substitute an invented score when nothing was assessed — an unprobed
+  // target has no posture, and a placeholder here reads as a real measurement.
+  const hasScore = qvs !== null && qvs !== undefined;
+  const readinessIndex = hasScore ? 100 - qvs : 0;
+
+  const pillarWeight = (v) => (v === null || v === undefined ? '0%' : `${100 - v}%`);
+  const gradeStatus = (threshold) => (!hasScore ? 'NOT ASSESSED' : qvs < threshold ? 'COMPLIANT' : 'PARTIAL');
+  const gradeColor = (threshold) => (!hasScore ? 'rgba(0,0,0,.35)' : qvs < threshold ? '#1A8A1A' : '#D47800');
+
   const complianceStats = [
-    { title: 'NIST FIPS 203 (ML-KEM)', status: 'COMPLIANT', color: '#1A8A1A', weight: '30%' },
-    { title: 'NIST FIPS 204 (ML-DSA)', status: 'PARTIAL', color: '#D47800', weight: '25%' },
+    { title: 'NIST FIPS 203 (ML-KEM)', status: gradeStatus(20), color: gradeColor(20), weight: pillarWeight(activeData?.riskScores?.web) },
+    { title: 'NIST FIPS 204 (ML-DSA)', status: gradeStatus(30), color: gradeColor(30), weight: pillarWeight(activeData?.riskScores?.api) },
     { title: 'NIST FIPS 205 (SLH-DSA)', status: 'PENDING', color: '#C0272D', weight: '10%' },
-    { title: 'CERT-In Annexure-A', status: 'COMPLIANT', color: '#1A8A1A', weight: '35%' },
+    { title: 'CERT-In Annexure-A', status: gradeStatus(50), color: gradeColor(50), weight: `${readinessIndex}%` },
   ];
 
   return (
@@ -18,9 +30,9 @@ const Posture = () => {
           <div style={{ position: 'relative', width: '150px', height: '150px', margin: '0 auto' }}>
              <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%' }}>
                 <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#eee" strokeWidth="3" />
-                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--pnb-gold)" strokeWidth="3" strokeDasharray="72, 100" />
+                 <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--pnb-gold)" strokeWidth="3" strokeDasharray={`${readinessIndex}, 100`} />
              </svg>
-             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontFamily: 'var(--disp)', fontSize: '32px', fontWeight: 700 }}>72%</div>
+             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontFamily: 'var(--disp)', fontSize: '32px', fontWeight: 700 }}>{hasScore ? `${readinessIndex}%` : 'N/A'}</div>
           </div>
           <div style={{ marginTop: '15px', fontWeight: 700, fontSize: '18px' }}>PNB PQC Readiness Index</div>
           <p style={{ fontSize: '12px', color: '#666' }}>Standardized across NIST and CERT-In frameworks</p>
@@ -40,47 +52,40 @@ const Posture = () => {
       </div>
 
       <div className="card">
-        <div className="card-title">Detailed Cryptographic Inventory & Audit Status</div>
+        <div className="card-title">Live Cryptographic Inventory & Audit Status</div>
         <table className="data-table">
           <thead>
             <tr>
-              <th>Asset Name</th>
-              <th>Surface</th>
-              <th>Protocol</th>
+              <th>Service Infrastructure</th>
+              <th>Category</th>
+              <th>Tech Profile</th>
               <th>Active Algorithm</th>
-              <th>QVS Score</th>
-              <th>NIST Compliance</th>
-              <th>Action</th>
+              <th>Risk Level</th>
+              <th>NIST Status</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>www.pnbindia.in</td>
-              <td><span className="risk-badge rb-low">WEB</span></td>
-              <td>TLS 1.3</td>
-              <td style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>ML-DSA-65 (Hybrid)</td>
-              <td><span style={{ color: '#1A8A1A', fontWeight: 700 }}>0</span></td>
-              <td>✅ FIPS 204 Ready</td>
-              <td><button className="btn btn-outline btn-sm" onClick={() => navigate('/inventory')}>Audit</button></td>
-            </tr>
-            <tr>
-              <td>vpn.pnb.bank.in</td>
-              <td><span className="risk-badge rb-medium">VPN</span></td>
-              <td>IKEv2</td>
-              <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#C0272D' }}>RSA-2048 (Legacy)</td>
-              <td><span style={{ color: '#C0272D', fontWeight: 700 }}>95</span></td>
-              <td>❌ Quantum Vulnerable</td>
-              <td><button className="btn btn-gold btn-sm" onClick={() => navigate('/remediation')}>Remediate</button></td>
-            </tr>
-            <tr>
-              <td>api-payments.pnb.in</td>
-              <td><span className="risk-badge rb-critical">API</span></td>
-              <td>REST / mTLS</td>
-              <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#D47800' }}>ECDSA (P-384)</td>
-              <td><span style={{ color: '#D47800', fontWeight: 700 }}>65</span></td>
-              <td>⚠️ Upgrade Recommended</td>
-              <td><button className="btn btn-gold btn-sm" onClick={() => navigate('/remediation')}>Fix Case</button></td>
-            </tr>
+            {(activeData?.cbom?.components || []).map((item, i) => (
+              <tr key={i}>
+                <td style={{ fontWeight: 700, color: '#111' }}>{item.component}</td>
+                <td><span className="risk-badge rb-low" style={{ background: '#eee', color: '#666', fontSize: '10px' }}>{item.category}</span></td>
+                <td>{item.version}</td>
+                <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '11px' }}>{item.algorithm}</td>
+                <td>
+                  <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : (item.risk === 'High' ? 'rb-high' : 'rb-low')}`}>
+                    {item.risk}
+                  </span>
+                </td>
+                <td>{item.quantumSafe ? '✅ FIPS 203' : '❌ VULNERABLE'}</td>
+              </tr>
+            ))}
+            {(!activeData || !activeData.cbom?.components?.length) && (
+              <tr>
+                <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                  No active scan data found. Please initiate an audit from the Dashboard.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
