@@ -68,6 +68,7 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
 | 🆕 | Audit trail didn't cover report-send, schedule create, or inventory add/delete | ✅ Fixed (no schedule-delete endpoint exists, so N/A) |
 | 🟢 | Android Play Store version metadata missing for most apps | **Corrected finding, not fixed** — see below; root cause isn't a regex bug and isn't reliably fixable without JS execution or a paid API |
+| 🆕 | Discovery relied on wordlist probing alone beyond CT/AXFR; probe timeout was 8s | ✅ Enhanced — timeout reduced to 3s, added a 2nd independent CT source (Cert Spotter), DNS MX/TXT record hints, and reverse-DNS on discovered IPs (verified live: 16 real hosts found by reverse-DNS alone that no other method surfaced) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
