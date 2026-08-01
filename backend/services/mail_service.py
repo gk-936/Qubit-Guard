@@ -20,6 +20,35 @@ from sqlalchemy.exc import SQLAlchemyError
 
 log = logging.getLogger(__name__)
 
+
+def _qvs_text(score, suffix: str = "/100") -> str:
+    """Render a QVS for the report. A missing score means the pillar was never
+    assessed — it must not be substituted with an invented number."""
+    return "Not Assessed" if score is None else f"{score}{suffix}"
+
+
+def _inverse_pct_text(score) -> str:
+    """Render `100 - QVS` (the 'readiness'/'compliant' side) safely."""
+    return "Not Assessed" if score is None else f"{100 - score}%"
+
+
+def _risk_level(score) -> str:
+    """Classify overall risk from a QVS.
+
+    QVS is a severity scale: 100 = fully quantum-vulnerable (RSA), 0 = fully PQC.
+    Higher therefore means worse. Thresholds match the dashboard so the emailed
+    report and the UI cannot disagree.
+    """
+    if score is None:
+        return "NOT ASSESSED"
+    if score >= 80:
+        return "CRITICAL"
+    if score >= 50:
+        return "HIGH"
+    if score >= 20:
+        return "MEDIUM"
+    return "LOW"
+
 _smtp_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="smtp")
 
 
@@ -157,11 +186,18 @@ def _extract_bank_name(url: str) -> str:
 def _generate_executive_report(risk_scores: dict, findings: dict, components: list, timestamp: datetime, bank_name: str = "Organization", **kwargs) -> str:
     """Executive Summary: High-level risk posture and recommendations."""
     
-    overall_qvs = risk_scores.get("overall", 75)
-    web_qvs = risk_scores.get("web", 80)
-    api_qvs = risk_scores.get("api", 70)
-    iot_qvs = risk_scores.get("iot", 85)
-    
+    overall_qvs = risk_scores.get("overall")
+    web_qvs = risk_scores.get("web")
+    api_qvs = risk_scores.get("api")
+    iot_qvs = risk_scores.get("iot")
+
+    overall_txt = _qvs_text(overall_qvs)
+    web_txt = _qvs_text(web_qvs)
+    api_txt = _qvs_text(api_qvs)
+    iot_txt = _qvs_text(iot_qvs)
+    readiness_txt = _inverse_pct_text(overall_qvs)
+    gap_txt = _qvs_text(overall_qvs, "%")
+
     # Extract URLs and findings
     web_url = kwargs.get("web_url", "")
     vpn_url = kwargs.get("vpn_url", "")
@@ -171,15 +207,7 @@ def _generate_executive_report(risk_scores: dict, findings: dict, components: li
     vpn_findings = kwargs.get("vpn_findings", [])
     mobile_findings = kwargs.get("mobile_findings", [])
     
-    # Risk classification
-    if overall_qvs < 30:
-        risk_level = "CRITICAL"
-    elif overall_qvs < 50:
-        risk_level = "HIGH"
-    elif overall_qvs < 70:
-        risk_level = "MEDIUM"
-    else:
-        risk_level = "LOW"
+    risk_level = _risk_level(overall_qvs)
     
     # CALCULATE INTEGRATED COUNTS (Findings + CBOM Risks)
     critical_count = 0
@@ -216,21 +244,21 @@ def _generate_executive_report(risk_scores: dict, findings: dict, components: li
     quantum_safe_count = len([c for c in components if c.get("quantumSafe")])
     
     content = f"""
-OVERALL QUANTUM VULNERABILITY SCORE (QVS): {overall_qvs}/100
+OVERALL QUANTUM VULNERABILITY SCORE (QVS): {overall_txt}
 
 EXECUTIVE SUMMARY: QUANTUM READINESS AUDIT
 {bank_name} — Post-Quantum Cryptography Initiative
 {timestamp.strftime('%B %d, %Y at %H:%M UTC')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-OVERALL QUANTUM VULNERABILITY SCORE (QVS): {overall_qvs}/100
+OVERALL QUANTUM VULNERABILITY SCORE (QVS): {overall_txt}
 RISK CLASSIFICATION: {risk_level}
 
 KEY METRICS:
-├─ Web/TLS Infrastructure QVS:    {web_qvs}/100
-├─ API Gateway Infrastructure QVS: {api_qvs}/100
-├─ IoT/Embedded Systems QVS:      {iot_qvs}/100
-└─ FIPS 203/204 Readiness:        {100-overall_qvs}% TRANSITION REQUIRED
+├─ Web/TLS Infrastructure QVS:    {web_txt}
+├─ API Gateway Infrastructure QVS: {api_txt}
+├─ IoT/Embedded Systems QVS:      {iot_txt}
+└─ FIPS 203/204 Readiness:        {readiness_txt} TRANSITION REQUIRED
 
 SCANNED ENDPOINTS:
 ├─ Web Portal: {web_url if web_url else 'N/A'}
@@ -251,10 +279,10 @@ VULNERABILITY SUMMARY:
 └─ QUANTUM-SAFE Components: {quantum_safe_count} Active
 
 COMPLIANCE STATUS:
-├─ NIST SP 800-215:           {100-overall_qvs}% Compliant (Gap: {overall_qvs}%)
+├─ NIST SP 800-215:           {readiness_txt} Compliant (Gap: {gap_txt})
 ├─ FIPS 203 Migration:        Recommended
 ├─ FIPS 204 Migration:        Recommended
-└─ CERT-In Guidelines:        {100-overall_qvs}% Aligned
+└─ CERT-In Guidelines:        {readiness_txt} Aligned
 
 REMEDIATION TIMELINE:
 ├─ Phase 1 (0-30 days):  Audit and Inventory Complete
@@ -414,8 +442,9 @@ QUANTUM-SAFE COMPONENTS ({len(safe)} items):
    Status: ✓ QUANTUM-SAFE
 """
     
-    overall_qvs = risk_scores.get("overall", 75)
-    
+    overall_qvs = risk_scores.get("overall")
+    readiness_txt = _inverse_pct_text(overall_qvs)
+
     content += f"""
 
 MIGRATION ROADMAP:
@@ -446,9 +475,11 @@ PRIORITY 3 (MEDIUM - Week 5-8):
 def _generate_compliance_audit_report(vulnerabilities: list, risk_scores: dict, timestamp: datetime, bank_name: str = "Organization", **kwargs) -> str:
     """Compliance Audit: Gap analysis against standards with infrastructure details."""
     
-    overall_qvs = risk_scores.get("overall", 75)
+    overall_qvs = risk_scores.get("overall")
     compliance_gap = overall_qvs
-    
+    compliant_txt = _inverse_pct_text(overall_qvs)
+    gap_txt = _qvs_text(overall_qvs, "%")
+
     web_url = kwargs.get("web_url", "")
     vpn_url = kwargs.get("vpn_url", "")
     api_url = kwargs.get("api_url", "")
@@ -469,8 +500,8 @@ INFRASTRUCTURE UNDER ASSESSMENT
 REGULATORY FRAMEWORK ASSESSMENT
 
 NIST SP 800-215 (Post-Quantum Cryptography Migration):
-├─ Assessment Status: {100-compliance_gap}% COMPLIANT
-├─ Gap Identified: {compliance_gap}% 
+├─ Assessment Status: {compliant_txt} COMPLIANT
+├─ Gap Identified: {gap_txt}
 ├─ Primary Gap: Insufficient quantum-safe algorithm implementation
 ├─ Web Infrastructure: Requires ML-KEM adoption
 ├─ VPN Systems: Requires post-quantum KEM
@@ -494,8 +525,8 @@ FIPS 204 (ML-DSA Standard):
 └─ Remediation: Integrate into PKI within 45 days
 
 CERT-In Cyber Security Guidelines (India):
-├─ PII Protection: {100-compliance_gap}% Quantum-Ready
-├─ Critical Infrastructure: {compliance_gap}% Gap
+├─ PII Protection: {compliant_txt} Quantum-Ready
+├─ Critical Infrastructure: {gap_txt} Gap
 ├─ Web Services: Requires immediate attention
 ├─ VPN Remote Access: Mandatory post-quantum migration
 ├─ Encryption Standards: Legacy protocols identified
@@ -504,7 +535,7 @@ CERT-In Cyber Security Guidelines (India):
 GAP SUMMARY:
 • {len(vulnerabilities)} legacy cryptographic components requiring migration
 • Zero hybrid cryptographic deployments (recommended immediate action)
-• {100-overall_qvs}% infrastructure not quantum-resistant
+• {compliant_txt} infrastructure not quantum-resistant
 • {len(mobile_findings)} mobile apps with outdated crypto libraries
 • Web portal {web_url} uses post-2000 algorithms
 • VPN gateway {vpn_url} vulnerable to harvest-now-decrypt-later attacks

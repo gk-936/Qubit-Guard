@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     [*] Qubit-Guard.AI Backend is up!
     [>] Framework: FastAPI + Uvicorn
     [>] PQC Scanning Engine: ONLINE (Deterministic)
-    [>] PQC Smart Selector: ONLINE (ML Random Forest)
+    [>] PQC Smart Selector: ONLINE (Deterministic Rule-Table Ensemble)
     [>] Storage: SQLite via SQLAlchemy
     """)
     yield
@@ -52,12 +52,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS_ORIGINS is a comma-separated allowlist (e.g.
+# "https://app.example.com,https://admin.example.com"). Defaults to the
+# Vite dev server origins this project actually uses locally. Note:
+# allow_origins=["*"] together with allow_credentials=True is an invalid
+# combination per the CORS spec — browsers reject it outright — so a
+# wildcard was never actually working safely here to begin with.
+_default_cors_origins = "http://localhost:5173,http://127.0.0.1:5173"
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", _default_cors_origins).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    # The frontend authenticates with a Bearer token in the Authorization
+    # header (see frontend/src/api.js — token pulled from localStorage and
+    # set on config.headers.Authorization) and never sets
+    # `withCredentials`/relies on cookies. So there is nothing here that
+    # needs cookies to cross an origin, and allow_credentials can stay off —
+    # which also sidesteps the wildcard-plus-credentials invalid combination
+    # noted above.
+    allow_credentials=False,
+    # Only the HTTP methods the frontend actually issues (see
+    # frontend/src/api.js: get/post/delete). Add PUT/PATCH here if a future
+    # endpoint needs them.
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    # Only the headers the frontend actually sends: JSON bodies, the bearer
+    # token, and the active-scan context header.
+    allow_headers=["Content-Type", "Authorization", "X-Scan-Id"],
 )
 
 

@@ -95,6 +95,19 @@ QVS_MAP = {
 }
 
 
+def _evidence_summary(findings: list) -> dict:
+    """Count findings by evidence class for a pillar's return dict.
+
+    "measured" = the claim follows directly from something observed on the wire.
+    "inferred" = the claim is extrapolated from a different observation (e.g.
+    firmware signing inferred from web PKI, archival key-wrapping inferred from
+    TLS key exchange, VPN vendor inferred from a keyword match on cert CN/SAN).
+    """
+    measured = sum(1 for f in findings if f.get("evidence") == "measured")
+    inferred = sum(1 for f in findings if f.get("evidence") == "inferred")
+    return {"measured": measured, "inferred": inferred}
+
+
 def _qvs(algorithm: str) -> int:
     """Return QVS score for a given algorithm string.
 
@@ -297,6 +310,8 @@ def _scan_web_tls(web_url: str) -> dict:
                 f"Expires: {not_after}"
             ),
             "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
             "raw": {
                 "cn": cn,
                 "issuer": issuer_org,
@@ -328,6 +343,8 @@ def _scan_web_tls(web_url: str) -> dict:
                        "negotiated group is not exposed by this Python runtime.")
                 ),
                 "recommendation": "Enable hybrid key exchange (X25519MLKEM768) for TLS 1.3 per FIPS 203 (ML-KEM).",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(kx_qvs)
 
@@ -341,6 +358,8 @@ def _scan_web_tls(web_url: str) -> dict:
                     f"presented certificate. {auth_algo} signatures are forgeable via Shor's algorithm on a CRQC."
                 ),
                 "recommendation": "Migrate the certificate to ML-DSA (FIPS 204) or a hybrid classical+PQC chain once your CA supports it.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(auth_qvs)
         elif auth_algo == "Unknown":
@@ -349,6 +368,8 @@ def _scan_web_tls(web_url: str) -> dict:
                 "issue": "Certificate Key Algorithm Undetermined",
                 "detail": "The certificate public key could not be parsed, so no signature-algorithm risk is claimed for this host.",
                 "recommendation": "Verify the `cryptography` package is installed so certificate keys can be inspected.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
 
         # Check TLS version
@@ -358,6 +379,8 @@ def _scan_web_tls(web_url: str) -> dict:
                 "issue": f"Legacy TLS Version: {tls_version}",
                 "detail": "TLS 1.2 and below do not support hybrid PQC key exchange groups. Upgrade required for quantum readiness.",
                 "recommendation": "Enforce TLS 1.3 minimum. Configure server to prefer PQC-hybrid cipher suites.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
 
@@ -369,13 +392,15 @@ def _scan_web_tls(web_url: str) -> dict:
             "issue": "TLS Probe Failed — Host Not Assessed",
             "detail": f"Could not complete a TLS handshake with {web_url}: {str(e)}. No cryptographic findings are reported for this host because none were observed.",
             "recommendation": "Verify endpoint availability, DNS resolution and firewall rules, then re-run the scan.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         return {"findings": findings, "qvs": None, "scanned": False,
-                "error": str(e)}
+                "error": str(e), "evidence_summary": _evidence_summary(findings)}
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
     return {"findings": findings, "qvs": avg_qvs, "scanned": True,
-            "handshake_ms": handshake_ms}
+            "handshake_ms": handshake_ms, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar B: VPN/TLS Engine ─────────────────────────────────────────────────
@@ -413,12 +438,14 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
         "vpn": "SSL-VPN Gateway", "remote": "Remote Access Gateway",
     }
     detected_vpn = "Unknown"
+    vendor_from_keyword = False
 
     if tls_info["reachable"]:
         search_str = f"{tls_info['cn']} {' '.join(tls_info.get('sans', []))}".lower()
         for keyword, label in vpn_keywords.items():
             if keyword in search_str:
                 detected_vpn = label
+                vendor_from_keyword = True
                 break
         if detected_vpn == "Unknown":
             detected_vpn = "IPsec (IKEv2) Gateway" if ikev2_responsive else "TLS Gateway (VPN type unconfirmed)"
@@ -428,6 +455,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
             "issue": f"VPN Gateway Identified: {detected_vpn}",
             "detail": f"TLS handshake with {host}:443 — CN: {tls_info['cn']} | Cipher: {tls_info['cipher_name']} ({tls_info['cipher_bits']}-bit) | TLS: {tls_info['tls_version']}",
             "recommendation": None,
+            "evidence": "inferred" if vendor_from_keyword else "measured",
+            "inferred_from": "keyword match on cert CN/SAN" if vendor_from_keyword else None,
         })
 
         kx = tls_info["key_exchange"]
@@ -439,6 +468,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": f"Quantum-Vulnerable VPN Key Exchange: {kx}",
                 "detail": f"VPN tunnel uses {kx} key exchange ({tls_info['cipher_name']}). HNDL attack: encrypted VPN traffic recorded today is decryptable post-quantum.",
                 "recommendation": "Upgrade to RFC 9370 compliant firmware. Enable hybrid PQC key exchange (ML-KEM + X25519).",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(kx_qvs)
         elif kx == "ECDHE":
@@ -447,6 +478,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": f"Classical VPN Key Exchange: {kx} (Quantum-Vulnerable)",
                 "detail": f"VPN tunnel uses {kx} ({tls_info['cipher_name']}). Forward secrecy against classical computers, but vulnerable to Shor's algorithm.",
                 "recommendation": "Enable hybrid X25519MLKEM768 key exchange. For IKEv2: enable RFC 9370 Multiple Key Exchanges.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(kx_qvs)
         elif "MLKEM" in tls_info["cipher_name"].upper() or "KYBER" in tls_info["cipher_name"].upper():
@@ -455,6 +488,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": "PQC-Hybrid Key Exchange Detected on VPN",
                 "detail": f"VPN gateway supports hybrid PQC: {tls_info['cipher_name']}. Quantum-resistant forward secrecy is active.",
                 "recommendation": None,
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(20)
 
@@ -464,6 +499,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": f"Legacy TLS on VPN: {tls_info['tls_version']}",
                 "detail": f"VPN negotiated {tls_info['tls_version']}. TLS 1.2 and below cannot support hybrid PQC cipher suites.",
                 "recommendation": "Enforce TLS 1.3 minimum on the VPN gateway.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
 
@@ -473,6 +510,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": "IKEv2 Gateway Detected (Classical Mode)",
                 "detail": f"Ports 500/4500 responsive on {host}. No IKE_INTERMEDIATE exchange (RFC 9242) support could be verified remotely.",
                 "recommendation": "Enable RFC 9370 Multiple Key Exchanges for hybrid PQC security in IKEv2.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
     else:
@@ -481,6 +520,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
             "issue": "VPN Gateway Unreachable",
             "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. VPN cryptographic posture could not be assessed.",
             "recommendation": "Verify VPN gateway availability. Provide VPN configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         if ikev2_responsive:
             findings.append({
@@ -488,13 +529,15 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
                 "issue": "IKEv2 Ports Responsive (No TLS Handshake)",
                 "detail": f"IKEv2 ports (500/4500) on {host} are responsive but TLS handshake failed. Likely pure IPsec without SSL-VPN.",
                 "recommendation": "Enable RFC 9370 Multiple Key Exchanges for hybrid PQC security.",
+                "evidence": "measured",
+                "inferred_from": None,
             })
             pillar_qvs_scores.append(95)
         else:
             pillar_qvs_scores.append(75)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
-    return {"findings": findings, "qvs": avg_qvs}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar C: API Security Engine ────────────────────────────────────────────
@@ -530,6 +573,8 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                         "issue": "Classical mTLS Enforced",
                         "detail": "API enforces mutual TLS, typically utilizing classical RSA/ECDSA. These are vulnerable to Shor's algorithm.",
                         "recommendation": "Transition to FIPS 204 (ML-DSA) certificates for B2B mTLS channels.",
+                        "evidence": "measured",
+                        "inferred_from": None,
                     })
                     pillar_qvs_scores.append(85)
     except (OSError, ssl.SSLError) as e:
@@ -552,6 +597,8 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                     "issue": f"PQC-Ready JWT Signature: {PQC_OIDS[oid]}",
                     "detail": "Token header contains valid NIST PQC Object Identifier (OID).",
                     "recommendation": None,
+                    "evidence": "measured",
+                    "inferred_from": None,
                 })
                 pillar_qvs_scores.append(0)
             elif alg in ["RS256", "RS384", "ES256", "ES384"]:
@@ -560,13 +607,15 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
                     "issue": f"Quantum-Vulnerable JWT Algorithm: {alg}",
                     "detail": f"Standard {alg} signature can be forged using Shor's algorithm on a post-quantum computer.",
                     "recommendation": "Migrate JWT signing to ML-DSA-65 (FIPS 204).",
+                    "evidence": "measured",
+                    "inferred_from": None,
                 })
                 pillar_qvs_scores.append(100)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError) as e:
             log.debug("Could not parse JWT header for %s: %s", api_url, e)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 90
-    return {"findings": findings, "qvs": avg_qvs}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar D: Firmware Integrity Engine ───────────────────────────────────────
@@ -611,6 +660,8 @@ def _scan_firmware(target: str) -> dict:
             "issue": f"Infrastructure PKI Algorithm Observed: {algo_label}",
             "detail": f"TLS certificate on {host} uses {auth_algo} (Cipher: {tls_info['cipher_name']}). Issuer: {tls_info['issuer_org']}. Organizations typically use consistent PKI across TLS and firmware code-signing.",
             "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
         })
 
         if auth_algo == "RSA":
@@ -619,6 +670,8 @@ def _scan_firmware(target: str) -> dict:
                 "issue": f"Quantum-Vulnerable Firmware Signing Inferred: {auth_algo}",
                 "detail": f"[Inferred from observed PKI] Infrastructure uses {auth_algo} certificates. Standard practice uses the same CA hierarchy for firmware code-signing. {auth_algo} signatures are forgeable via Shor's algorithm on a CRQC.",
                 "recommendation": "Migrate firmware signing to XMSS (RFC 8391) or LMS (RFC 8554) per NIST SP 800-208.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
             })
             pillar_qvs_scores.append(algo_qvs)
         elif auth_algo == "ECDSA":
@@ -627,6 +680,8 @@ def _scan_firmware(target: str) -> dict:
                 "issue": f"Quantum-Vulnerable Firmware Signing Inferred: {auth_algo}",
                 "detail": f"[Inferred from observed PKI] Infrastructure uses {auth_algo} certificates. ECDSA signatures are vulnerable to Shor's algorithm, with slightly higher quantum resource requirements than RSA.",
                 "recommendation": "Migrate firmware signing to XMSS (RFC 8391) or LMS (RFC 8554) per NIST SP 800-208.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
             })
             pillar_qvs_scores.append(algo_qvs)
         else:
@@ -635,6 +690,8 @@ def _scan_firmware(target: str) -> dict:
                 "issue": f"Firmware Signing Algorithm: {auth_algo}",
                 "detail": f"[Inferred from observed PKI] Non-standard algorithm detected. Manual review recommended.",
                 "recommendation": "Review firmware signing certificates directly.",
+                "evidence": "inferred",
+                "inferred_from": "observed infrastructure PKI (TLS certificate algorithm)",
             })
             pillar_qvs_scores.append(50)
 
@@ -643,6 +700,8 @@ def _scan_firmware(target: str) -> dict:
             "issue": "No XMSS/LMS State Counter Detected",
             "detail": "XMSS/LMS require strict one-time-use state management. No evidence of stateful hash-based signature infrastructure detected via remote probing.",
             "recommendation": "Implement HSM-backed state counter (e.g., AWS CloudHSM or Thales Luna) before deploying XMSS/LMS.",
+            "evidence": "inferred",
+            "inferred_from": "no firmware image was inspected; no dedicated state-counter probe exists",
         })
         pillar_qvs_scores.append(min(algo_qvs + 5, 100))
     else:
@@ -651,6 +710,8 @@ def _scan_firmware(target: str) -> dict:
             "issue": "Firmware Assessment: Target Unreachable",
             "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. Firmware signing posture could not be assessed remotely.",
             "recommendation": "Provide internal firmware signing certificates or HSM configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         pillar_qvs_scores.append(75)
 
@@ -660,11 +721,13 @@ def _scan_firmware(target: str) -> dict:
             "issue": f"Firmware Update Endpoints Exposed: {', '.join(fw_endpoints)}",
             "detail": f"Publicly accessible firmware paths detected on {host}. Exposed endpoints increase supply-chain attack surface.",
             "recommendation": "Restrict firmware update endpoints to internal networks or require mutual TLS.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         pillar_qvs_scores.append(95)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
-    return {"findings": findings, "qvs": avg_qvs}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Pillar E: Archival Encryption Engine ──────────────────────────────────────
@@ -714,6 +777,8 @@ def _scan_archival(target: str) -> dict:
             "issue": f"Key Exchange Algorithm Observed: {kx_display}",
             "detail": f"TLS connection to {host} uses {kx} key exchange. Organizations typically use the same key exchange/wrapping algorithms across TLS and archival encryption.",
             "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
         })
 
         if kx == "RSA":
@@ -722,6 +787,8 @@ def _scan_archival(target: str) -> dict:
                 "issue": f"Quantum-Vulnerable Key Wrapping Inferred: {kx}",
                 "detail": f"[Inferred from observed key exchange] Archival data likely wrapped with {kx} keys. HNDL attacks can recover symmetric keys from archived key-wrap envelopes post-quantum.",
                 "recommendation": "Migrate key wrapping to BIKE-L1 or HQC-128 code-based KEMs for 25+ year archival confidentiality.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
             })
             pillar_qvs_scores.append(kx_qvs)
         elif kx in ["ECDHE", "DHE"]:
@@ -730,6 +797,8 @@ def _scan_archival(target: str) -> dict:
                 "issue": f"Classical Key Exchange for Archival: {kx}",
                 "detail": f"[Inferred from observed key exchange] {kx} provides forward secrecy but is vulnerable to Shor's algorithm. Archived key-wrap envelopes at risk post-quantum.",
                 "recommendation": "Migrate key wrapping to BIKE-L1 or HQC-128 for long-term archival confidentiality.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
             })
             pillar_qvs_scores.append(kx_qvs)
         elif "MLKEM" in tls_info["cipher_name"].upper() or "KYBER" in tls_info["cipher_name"].upper():
@@ -738,6 +807,8 @@ def _scan_archival(target: str) -> dict:
                 "issue": "PQC-Ready Key Exchange Detected",
                 "detail": f"Hybrid PQC key exchange ({tls_info['cipher_name']}) observed. Long-term archival confidentiality is quantum-resistant if same infrastructure is used.",
                 "recommendation": None,
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
             })
             pillar_qvs_scores.append(20)
         else:
@@ -746,6 +817,8 @@ def _scan_archival(target: str) -> dict:
                 "issue": f"Archival Key Wrapping Assessment: {kx}",
                 "detail": f"Key exchange {kx} detected. Quantum risk requires further analysis.",
                 "recommendation": "Review archival encryption configuration directly.",
+                "evidence": "inferred",
+                "inferred_from": "observed TLS key exchange",
             })
             pillar_qvs_scores.append(50)
 
@@ -754,6 +827,8 @@ def _scan_archival(target: str) -> dict:
             "issue": "No Code-Based KEM (BIKE/HQC) Support Detected",
             "detail": f"No BIKE or HQC markers in TLS negotiation with {host}. BIKE/HQC provide cryptographic diversity for long-term archival.",
             "recommendation": "Integrate liboqs BIKE-L1 or HQC-128 into the archival encryption pipeline for 25+ year confidentiality.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         pillar_qvs_scores.append(min(kx_qvs, 90))
     else:
@@ -762,6 +837,8 @@ def _scan_archival(target: str) -> dict:
             "issue": "Archival Assessment: Target Unreachable",
             "detail": f"Could not establish TLS connection to {host}: {tls_info.get('error', 'Unknown')}. Archival encryption posture could not be assessed remotely.",
             "recommendation": "Provide archival encryption configuration for manual review.",
+            "evidence": "measured",
+            "inferred_from": None,
         })
         pillar_qvs_scores.append(75)
 
@@ -772,10 +849,12 @@ def _scan_archival(target: str) -> dict:
             "issue": f"Cloud Storage Encryption Detected ({cloud})",
             "detail": f"Header `{header}: {value}` indicates server-side encryption is active.",
             "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
         })
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else 75
-    return {"findings": findings, "qvs": avg_qvs}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

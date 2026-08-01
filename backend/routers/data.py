@@ -406,10 +406,11 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         row.metric: row.value for row in posture_rows
     }
     
-    # Default or provide overall score
-    if "overall" not in risk_scores:
-        risk_scores["overall"] = 75
-    
+    # A missing score stays missing — never fabricate a QVS. Downstream,
+    # _cyber_rating() (this file) and services/mail_service.py's report
+    # generators both treat a missing/None "overall" as "Not Assessed"
+    # rather than substituting a default number.
+
     # Fetch findings
     cbom_vuln_rows = db.query(CbomVulnerabilitySummary).all()
     findings = {

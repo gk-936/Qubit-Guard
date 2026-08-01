@@ -61,14 +61,18 @@ def check_zone_transfer(domain: str) -> list:
         for ns in ns_query:
             ns_host = str(ns.target)
             try:
-                zone = dns.zone.from_xfr(dns.query.xfr(ns_host, domain, timeout=2))
+                # dns.query.xfr requires a literal IP address — passing the
+                # nameserver's hostname raises a bare ValueError. Resolve it first.
+                ns_addr = str(dns.resolver.resolve(ns_host, 'A')[0])
+                zone = dns.zone.from_xfr(dns.query.xfr(ns_addr, domain, timeout=2))
                 if zone:
                     for name in zone.nodes.keys():
                         discovered.append(f"{name}.{domain}".strip('.'))
-            except (dns.exception.DNSException, OSError, EOFError) as e:
+            except (dns.exception.DNSException, OSError, EOFError, ValueError, IndexError) as e:
+                # Refusal is the normal, expected outcome for a well-configured zone.
                 log.debug("AXFR zone transfer failed against %s for %s: %s", ns_host, domain, e)
                 continue
-    except dns.exception.DNSException as e:
+    except (dns.exception.DNSException, OSError, ValueError) as e:
         log.debug("NS lookup failed for %s: %s", domain, e)
     return list(set(discovered))
 
@@ -210,15 +214,53 @@ def probe_host(host: str, base_domain: str) -> dict:
     except (OSError, ssl.SSLError, ValueError) as e:
         log.debug("TLS probe failed for %s: %s", host, e)
 
-    # 2. Check for VPN (Pillar B) - Static Heuristics + Keyword analysis
+    # 2. Check for VPN (Pillar B) - hostname heuristic narrows candidates, then a
+    # cheap IKE port probe (≤3s, only run on hosts the heuristic already flagged —
+    # no extra hosts are probed) tries to upgrade the tag from a guess to evidence.
     if "vpn" in host.lower() or "gate" in host.lower() or "remote" in host.lower():
         asset_info["pillars"].append("VPN/TLS")
-        asset_info["details"]["vpn_type"] = "SSL-VPN (Inferred)"
+        ike_open_port = None
+        for ike_port in (500, 4500):
+            try:
+                with socket.create_connection((host, ike_port), timeout=3):
+                    ike_open_port = ike_port
+                    break
+            except OSError as e:
+                log.debug("IKE port %s not responsive on %s: %s", ike_port, host, e)
+                continue
+        if ike_open_port:
+            asset_info["details"]["vpn_type"] = f"IPsec/IKE VPN Gateway (port {ike_open_port} open)"
+            asset_info["details"]["vpn_classification_evidence"] = "probed"
+        else:
+            # IKE ports closed doesn't rule out an SSL-VPN (those live on 443), so the
+            # hostname match remains the only basis for this classification.
+            asset_info["details"]["vpn_type"] = "SSL-VPN (Inferred)"
+            asset_info["details"]["vpn_classification_evidence"] = "hostname heuristic"
 
-    # 3. Check for API (Pillar C)
+    # 3. Check for API (Pillar C) - hostname heuristic narrows candidates, then a
+    # cheap HEAD request (≤3s, same narrowed set — no extra hosts are probed) checks
+    # for an API-shaped Content-Type to upgrade the tag from a guess to evidence.
     if web_active and ("api" in host.lower() or "gw" in host.lower() or "services" in host.lower()):
         asset_info["pillars"].append("API/TLS")
-        asset_info["details"]["api_type"] = "REST/JWT (Inferred)"
+        content_type = ""
+        try:
+            req = urllib.request.Request(
+                f"https://{host}/", method="HEAD",
+                headers={'User-Agent': 'QuantumShield-Audit/1.0'},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                content_type = resp.headers.get('Content-Type', '')
+        except (urllib.error.URLError, OSError) as e:
+            log.debug("API content-type probe failed for %s: %s", host, e)
+
+        if content_type and ("json" in content_type.lower() or "api" in content_type.lower()):
+            asset_info["details"]["api_type"] = f"REST/JSON API (Content-Type: {content_type})"
+            asset_info["details"]["api_classification_evidence"] = "probed"
+        else:
+            # A non-API Content-Type (or no response) doesn't disprove an API host
+            # behind a HEAD-unfriendly gateway, so this stays a hostname guess.
+            asset_info["details"]["api_type"] = "REST/JWT (Inferred)"
+            asset_info["details"]["api_classification_evidence"] = "hostname heuristic"
     
     if web_active and not asset_info["pillars"]:
         asset_info["pillars"].append("Web/TLS")
