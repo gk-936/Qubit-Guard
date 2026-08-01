@@ -66,8 +66,8 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🆕 | `scan_id` was a bare millisecond timestamp with no collision protection on a `unique=True` column | ✅ Fixed (random suffix added; concurrent scans observed landing 1ms apart) |
 | 🆕 | `test_pqc.py` hardcoded the wrong port (5001 vs real 5006) — every request connection-refused | ✅ Fixed |
 | 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
-| 🟢 | Android Play Store version metadata missed for some apps (HTML-regex scrape gap) — cosmetic, doesn't affect PQC scoring | Open (low priority) |
-| 🟢 | Audit trail still doesn't cover report-send, schedule create/delete, or inventory delete — only login and scan start/complete | Open (login was the highest-value gap and is now closed; broader coverage is a scope decision, not a bug) |
+| 🆕 | Audit trail didn't cover report-send, schedule create, or inventory add/delete | ✅ Fixed (no schedule-delete endpoint exists, so N/A) |
+| 🟢 | Android Play Store version metadata missing for most apps | **Corrected finding, not fixed** — see below; root cause isn't a regex bug and isn't reliably fixable without JS execution or a paid API |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
 otherwise have surfaced them: `_qvs()` matched substrings in dict order so `ECDHE-RSA` scored as
@@ -158,6 +158,34 @@ already-running server without restarting it:
   concurrent scans landed 1ms apart — not an actual collision, but exposed the missing collision
   protection that was then fixed). All synthetic scan/schedule rows created during testing were
   deleted afterward.
+
+---
+
+## Follow-up (2026-08-01): Android version metadata — corrected finding
+
+Round 3 characterized this as "Android Play Store version metadata missed for some apps (HTML-
+regex scrape gap)". Live investigation before attempting a fix found that characterization was
+wrong in an important way — this is not a fixable regex bug:
+
+- Most Android entries are `derived-from-ios` (no free Play Store search API exists — see
+  finding #11), and reuse the iOS bundle ID as a guessed Android package ID. Fetching
+  `play.google.com/store/apps/details?id=<that-id>` for HDFC's real app returned **HTTP 404** —
+  the guessed ID doesn't exist on Play Store at all, so no regex could ever succeed here.
+- For a package ID confirmed to exist (`com.google.android.gm`, verified 200 OK), all three
+  version-extraction regexes still matched nothing. Checked the page's own SEO
+  `application/ld+json` structured-data block — the stable, Google-published metadata format —
+  and it has no version field either. Google's current Play Store listing page does not expose
+  app version anywhere in static, unauthenticated HTML; it's either client-rendered via JS this
+  scraper doesn't execute, or no longer published at all.
+- The only dotted-number-looking strings left in the raw HTML are unlabeled and ambiguous (8
+  candidates, none identifiably "the version"). Guessing one of them would reintroduce the exact
+  fabrication pattern this whole audit has been removing — a plausible-looking number standing in
+  for an unverified value.
+
+**Conclusion**: the code's current behavior — try, fail, report `"Unknown"` — is already the
+correct, honest outcome given real data availability. Left unchanged. A real fix would require
+either a headless browser (JS execution) or a paid/authenticated Play Store data API, neither of
+which is in scope here.
 
 ---
 
