@@ -97,10 +97,19 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
                 "logins": len(findings.get("api", [])),   # Mapping logins to API findings
             }
             
+            def _pct_or_none(qvs):
+                # qvs is None when that pillar wasn't assessed (unreachable target,
+                # no JWT supplied, etc.) — a documented, expected outcome, not an
+                # edge case. `risk_scores.get(key, 100)` used to crash here: the
+                # key is always present (just set to None), so the default never
+                # applied and `100 - None` raised a TypeError, 500-ing the whole
+                # dashboard for any scan with an unassessed pillar.
+                return max(0, 100 - qvs) if qvs is not None else None
+
             posture = {
-                "mlKemAdoption": max(0, 100 - risk_scores.get("web", 100)),
-                "mlDsaTransition": max(0, 100 - risk_scores.get("api", 100)),
-                "legacyRemoval": max(0, 100 - risk_scores.get("overall", 100)),
+                "mlKemAdoption": _pct_or_none(risk_scores.get("web")),
+                "mlDsaTransition": _pct_or_none(risk_scores.get("api")),
+                "legacyRemoval": _pct_or_none(risk_scores.get("overall")),
             }
             
             cbom_summary = {
