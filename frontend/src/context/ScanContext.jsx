@@ -3,7 +3,7 @@ import { getScanHistory, getScanById } from '../api';
 
 const ScanContext = createContext();
 
-export const ScanProvider = ({ children }) => {
+export const ScanProvider = ({ children, isLoggedIn }) => {
   const [activeScanId, setActiveScanId] = useState(localStorage.getItem('active_scan_id') || '');
   const [activeScanMetadata, setActiveScanMetadata] = useState(null);
   const [activeData, setActiveData] = useState(null);
@@ -44,12 +44,19 @@ export const ScanProvider = ({ children }) => {
     // Skip entirely when logged out — these are authenticated endpoints, and
     // firing them anyway just produces a guaranteed 401 on every mount
     // (including the login page itself) for no benefit.
-    if (!localStorage.getItem('pnc_token')) return;
+    //
+    // `isLoggedIn` must be in the dependency array, not just checked inline:
+    // ScanProvider mounts once at the top of the app (wrapping both the
+    // login route and the main routes), before any login has happened, so
+    // on a fresh login (no page reload) this effect would otherwise never
+    // re-run and history/activeData would silently stay empty until the
+    // user manually hit "Refresh" on the History page.
+    if (!isLoggedIn || !localStorage.getItem('pnc_token')) return;
     fetchHistory();
     if (activeScanId) {
       fetchScanDetail(activeScanId);
     }
-  }, [activeScanId]);
+  }, [activeScanId, isLoggedIn]);
 
   const switchScan = (id) => {
     setActiveScanId(id);

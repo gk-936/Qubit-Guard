@@ -239,16 +239,16 @@ const Home = () => {
           <div className="card">
             <div className="card-title"><span className="ct-icon">🎯</span>Posture of PQC</div>
             <div style={{ marginBottom: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>ML-KEM Adoption</span><span style={{ fontWeight: 700, color: 'var(--pnb-gold)' }}>{data.posture.mlKemAdoption}%</span></div>
-              <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: `${data.posture.mlKemAdoption}%` }}></div></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>ML-KEM Adoption</span><span style={{ fontWeight: 700, color: 'var(--pnb-gold)' }}>{data.posture.mlKemAdoption == null ? 'N/A' : `${data.posture.mlKemAdoption}%`}</span></div>
+              <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: `${data.posture.mlKemAdoption ?? 0}%` }}></div></div>
             </div>
             <div style={{ marginBottom: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>ML-DSA Transition</span><span style={{ fontWeight: 700, color: 'var(--pnb-gold)' }}>{data.posture.mlDsaTransition}%</span></div>
-              <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: `${data.posture.mlDsaTransition}%` }}></div></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>ML-DSA Transition</span><span style={{ fontWeight: 700, color: 'var(--pnb-gold)' }}>{data.posture.mlDsaTransition == null ? 'N/A' : `${data.posture.mlDsaTransition}%`}</span></div>
+              <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: `${data.posture.mlDsaTransition ?? 0}%` }}></div></div>
             </div>
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>Legacy Protocol Removal</span><span style={{ fontWeight: 700, color: '#C0272D' }}>{data.posture.legacyRemoval}%</span></div>
-              <div className="prog-bar"><div className="prog-fill pf-red" style={{ width: `${data.posture.legacyRemoval}%` }}></div></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>Legacy Protocol Removal</span><span style={{ fontWeight: 700, color: '#C0272D' }}>{data.posture.legacyRemoval == null ? 'N/A' : `${data.posture.legacyRemoval}%`}</span></div>
+              <div className="prog-bar"><div className="prog-fill pf-red" style={{ width: `${data.posture.legacyRemoval ?? 0}%` }}></div></div>
             </div>
           </div>
         </div>

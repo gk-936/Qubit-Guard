@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
+import { getCbomData } from '../api';
 
 // Every quantum-safe algorithm was being labelled "FIPS 203" regardless of which
 // one it actually was — a ML-DSA signature is FIPS 204, SLH-DSA is FIPS 205, and
@@ -17,7 +18,24 @@ const nistStandard = (algorithm) => {
 
 const Posture = () => {
   const navigate = useNavigate();
-  const { activeData } = useScan();
+  const { activeData, activeScanId } = useScan();
+  const [cbomItems, setCbomItems] = useState([]);
+
+  // The scan's raw CBOM blob (activeData.cbom.components) uses field names
+  // {name, crypto, type} — this table needs {component, algorithm, category,
+  // risk}. GET /api/data/cbom already does exactly that transformation (it's
+  // what CBOM.jsx uses), so fetch through the same endpoint instead of
+  // reading the raw shape directly, which was rendering every one of these
+  // columns blank ("component"/"algorithm"/"category"/"risk" never existed
+  // on the raw objects) except "version" (a real field, hence "Unknown"/"v1")
+  // and the quantumSafe-derived NIST Status column.
+  useEffect(() => {
+    getCbomData()
+      .then(res => {
+        if (res.data.success) setCbomItems(res.data.data.cbomItems);
+      })
+      .catch(err => console.error('Failed to fetch CBOM data for posture table:', err));
+  }, [activeScanId]);
 
   const qvs = activeData?.riskScores?.overall;
   // Do not substitute an invented score when nothing was assessed — an unprobed
@@ -78,21 +96,23 @@ const Posture = () => {
             </tr>
           </thead>
           <tbody>
-            {(activeData?.cbom?.components || []).map((item, i) => (
+            {cbomItems.map((item, i) => (
               <tr key={i}>
                 <td style={{ fontWeight: 700, color: '#111' }}>{item.component}</td>
                 <td><span className="risk-badge rb-low" style={{ background: '#eee', color: '#666', fontSize: '10px' }}>{item.category}</span></td>
                 <td>{item.version}</td>
                 <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '11px' }}>{item.algorithm}</td>
                 <td>
-                  <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : (item.risk === 'High' ? 'rb-high' : 'rb-low')}`}>
+                  <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : item.risk === 'High' ? 'rb-high' : item.risk === 'Not Assessed' ? 'rb-na' : 'rb-low'}`}>
                     {item.risk}
                   </span>
                 </td>
-                <td>{item.quantumSafe ? `✅ ${nistStandard(item.algorithm)}` : '❌ VULNERABLE'}</td>
+                <td>{item.quantumSafe === null || item.quantumSafe === undefined
+                  ? '— Not Assessed'
+                  : item.quantumSafe ? `✅ ${nistStandard(item.algorithm)}` : '❌ VULNERABLE'}</td>
               </tr>
             ))}
-            {(!activeData || !activeData.cbom?.components?.length) && (
+            {cbomItems.length === 0 && (
               <tr>
                 <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
                   No active scan data found. Please initiate an audit from the Dashboard.

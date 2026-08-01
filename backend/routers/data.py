@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from db import get_db
+from db import get_db, with_retry
 from models import DashboardSummary, InventoryStat, PostureStat, CbomVulnerabilitySummary, CbomItem, ScanResult
 from services.cbom_generator import generate_cyclonedx
 from services.mail_service import send_scan_report, send_scan_report_async, generate_professional_pdf, _extract_bank_name
+from services.audit_service import log_audit_event
 from pydantic import BaseModel
 
 class EmailRequest(BaseModel):
@@ -66,9 +67,9 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            risk_scores = json.loads(scan.risk_scores_json)
-            cbom = json.loads(scan.cbom_json)
-            findings = json.loads(scan.findings_json)
+            risk_scores = json.loads(scan.risk_scores_json or '{}')
+            cbom = json.loads(scan.cbom_json or '{}')
+            findings = json.loads(scan.findings_json or '{}')
             # Derive dashboard stats directly from structural scan results (no fakes)
             comp_count = len(cbom.get("components", []))
             
@@ -97,10 +98,19 @@ def get_dashboard(request: Request, db: Session = Depends(get_db)):
                 "logins": len(findings.get("api", [])),   # Mapping logins to API findings
             }
             
+            def _pct_or_none(qvs):
+                # qvs is None when that pillar wasn't assessed (unreachable target,
+                # no JWT supplied, etc.) — a documented, expected outcome, not an
+                # edge case. `risk_scores.get(key, 100)` used to crash here: the
+                # key is always present (just set to None), so the default never
+                # applied and `100 - None` raised a TypeError, 500-ing the whole
+                # dashboard for any scan with an unassessed pillar.
+                return max(0, 100 - qvs) if qvs is not None else None
+
             posture = {
-                "mlKemAdoption": max(0, 100 - risk_scores.get("web", 100)),
-                "mlDsaTransition": max(0, 100 - risk_scores.get("api", 100)),
-                "legacyRemoval": max(0, 100 - risk_scores.get("overall", 100)),
+                "mlKemAdoption": _pct_or_none(risk_scores.get("web")),
+                "mlDsaTransition": _pct_or_none(risk_scores.get("api")),
+                "legacyRemoval": _pct_or_none(risk_scores.get("overall")),
             }
             
             cbom_summary = {
@@ -183,7 +193,7 @@ def get_inventory(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            cbom = json.loads(scan.cbom_json)
+            cbom = json.loads(scan.cbom_json or '{}')
             data = [
                 {
                     "component": c["name"],
@@ -246,7 +256,8 @@ def delete_asset(purl: str, db: Session = Depends(get_db)):
     if item:
         deleted_purl = item.purl
         db.delete(item)
-        db.commit()
+        with_retry(lambda: db.commit())
+        log_audit_event({"action": "INVENTORY_DELETE", "purl": deleted_purl})
         return {"success": True, "message": f"Asset {deleted_purl} removed successfully."}
 
     return JSONResponse(
@@ -262,14 +273,27 @@ def get_cbom(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            cbom = json.loads(scan.cbom_json)
+            cbom = json.loads(scan.cbom_json or '{}')
+            def _risk_from_quantum_safe(qs):
+                # qs is None for a pillar with zero findings (never assessed —
+                # e.g. the API pillar with no JWT supplied), not "definitely
+                # vulnerable". `"Critical" if not qs else "Safe"` collapsed
+                # both False and None into "Critical", mislabeling an
+                # unassessed component as the worst possible risk. Found
+                # while verifying the Posture-page CBOM field-mapping fix
+                # (same "None means not assessed" pattern already fixed
+                # elsewhere in this file for the dashboard posture calc).
+                if qs is None:
+                    return "Not Assessed"
+                return "Safe" if qs else "Critical"
+
             cbom_items = [
                 {
                     "component": c["name"],
                     "version": c.get("version", ""),
                     "algorithm": c.get("crypto", "Unknown"),
                     "quantumSafe": c.get("quantumSafe", False),
-                    "risk": "Critical" if not c.get("quantumSafe") else "Safe",
+                    "risk": _risk_from_quantum_safe(c.get("quantumSafe")),
                     "category": c.get("type", "TLS"),
                     "purl": f"pkg:triad/{c['name']}@{c.get('version', '0.0.0')}",
                     "source": "scan",
@@ -367,7 +391,7 @@ def get_remediation(request: Request, db: Session = Depends(get_db)):
     if scan_id:
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
-            findings = json.loads(scan.findings_json)
+            findings = json.loads(scan.findings_json or '{}')
             return {"success": True, "data": generate_triad_remediation(findings, scan.web_url, scan.vpn_url, scan.api_url)}
     
     return {"success": True, "data": []}
@@ -423,9 +447,9 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
     if latest_scan:
         try:
             import json
-            scan_findings = json.loads(latest_scan.findings_json)
-            risk_scores = json.loads(latest_scan.risk_scores_json)
-            cbom_data = json.loads(latest_scan.cbom_json)
+            scan_findings = json.loads(latest_scan.findings_json or '{}')
+            risk_scores = json.loads(latest_scan.risk_scores_json or '{}')
+            cbom_data = json.loads(latest_scan.cbom_json or '{}')
             
             # Map simplified findings for the summary counts
             # findings is used for the summary table counts in some reports
@@ -480,6 +504,7 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         success, detail = False, "SMTP_TIMEOUT"
 
     if success:
+        log_audit_event({"action": "REPORT_SEND", "email": req.email, "report_type": req.reportType, "delivered": True})
         return {
             "success": True,
             "delivered": True,
@@ -495,6 +520,7 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         "SMTP_TIMEOUT":   "the SMTP server did not respond within 10 seconds.",
     }
     reason = reasons.get(str(detail), f"SMTP error: {detail}")
+    log_audit_event({"action": "REPORT_SEND", "email": req.email, "report_type": req.reportType, "delivered": False, "reason_code": str(detail)})
     return {
         "success": False,
         "delivered": False,
@@ -518,8 +544,9 @@ def add_inventory_item(body: InventoryItemRequest, db: Session = Depends(get_db)
         source="manual"
     )
     db.add(new_item)
-    db.commit()
+    with_retry(lambda: db.commit())
     db.refresh(new_item)
+    log_audit_event({"action": "INVENTORY_ADD", "purl": new_item.purl, "component": new_item.component})
     return {"success": True, "message": "Asset added successfully."}
 
 
@@ -541,9 +568,9 @@ def download_pdf_report(type: str = "executive", db: Session = Depends(get_db)):
     
     if latest_scan:
         try:
-            scan_data["findings"] = json.loads(latest_scan.findings_json)
-            scan_data["riskScores"] = json.loads(latest_scan.risk_scores_json)
-            scan_data["cbom"] = json.loads(latest_scan.cbom_json)
+            scan_data["findings"] = json.loads(latest_scan.findings_json or '{}')
+            scan_data["riskScores"] = json.loads(latest_scan.risk_scores_json or '{}')
+            scan_data["cbom"] = json.loads(latest_scan.cbom_json or '{}')
             
             # Map simplified findings for the PDF generator internal logic
             scan_data["web_findings"] = scan_data["findings"].get("web", [])

@@ -549,6 +549,11 @@ body {
   color: #fff;
 }
 
+.rb-na {
+  background: #E5E5E5;
+  color: #666;
+}
+
 .rb-elite {
   background: linear-gradient(135deg, #2A5A8A, #1A3A6A);
   color: #fff;
@@ -688,6 +693,11 @@ body {
 
 .pqc-no {
   color: #C0272D;
+  font-size: 16px;
+}
+
+.pqc-na {
+  color: #888;
   font-size: 16px;
 }
 

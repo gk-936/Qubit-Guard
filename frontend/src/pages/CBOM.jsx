@@ -132,9 +132,11 @@ const CBOM = () => {
                   <td><span style={{ fontSize: '10px', background: '#eee', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase' }}>{item.category}</span></td>
                   <td>{item.version}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600 }}>{item.algorithm}</td>
-                  <td>{item.quantumSafe ? <span className="pqc-yes">✅ READY</span> : <span className="pqc-no">❌ VULNERABLE</span>}</td>
+                  <td>{item.quantumSafe === null || item.quantumSafe === undefined
+                    ? <span className="pqc-na">— Not Assessed</span>
+                    : item.quantumSafe ? <span className="pqc-yes">✅ READY</span> : <span className="pqc-no">❌ VULNERABLE</span>}</td>
                   <td>
-                    <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : (item.risk === 'High' ? 'rb-high' : 'rb-low')}`}>
+                    <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : item.risk === 'High' ? 'rb-high' : item.risk === 'Not Assessed' ? 'rb-na' : 'rb-low'}`}>
                       {item.risk}
                     </span>
                   </td>

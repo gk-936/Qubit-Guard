@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from db import get_db
+from db import get_db, with_retry
 from models import Schedule
+from services.audit_service import log_audit_event
 
 router = APIRouter()
 
@@ -32,7 +33,7 @@ def create_schedule(body: ScheduleCreateRequest, db: Session = Depends(get_db)):
         is_active=True
     )
     db.add(schedule)
-    db.commit()
+    with_retry(lambda: db.commit())
     db.refresh(schedule)
     
     # Live-register the job with APScheduler
@@ -42,6 +43,12 @@ def create_schedule(body: ScheduleCreateRequest, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"[SCHEDULER] Failed to register live job: {e}")
 
+    log_audit_event({
+        "action": "SCHEDULE_CREATE",
+        "schedule_id": schedule.id,
+        "frequency": body.frequency,
+        "email": body.email,
+    })
     return {
         "success": True, 
         "schedule": {

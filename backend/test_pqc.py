@@ -2,7 +2,7 @@
 import urllib.request
 import json
 
-BASE = "http://localhost:5001/api"
+BASE = "http://localhost:5006/api"
 
 def test(name, url, method="GET", body=None):
     print(f"\n{'='*60}")

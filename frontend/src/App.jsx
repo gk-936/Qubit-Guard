@@ -130,7 +130,7 @@ function App() {
 
   return (
     <ToastProvider>
-      <ScanProvider>
+      <ScanProvider isLoggedIn={isLoggedIn}>
         <Routes>
           <Route path="/login" element={isLoggedIn ? <Navigate to="/" replace /> : <Login />} />
           <Route path="/" element={<ProtectedRoute isLoggedIn={isLoggedIn}><Layout onLogout={handleLogout} /></ProtectedRoute>}>

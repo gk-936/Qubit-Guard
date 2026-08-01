@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 
-from db import get_db
+from db import get_db, with_retry
 from models import ScanResult
 from services.scanner_engine import perform_triad_scan
 from services.api_scanner import discover_endpoints
@@ -47,9 +47,9 @@ def get_scan_detail(scan_id: str, db: Session = Depends(get_db)):
         "data": {
             "id": scan.scan_id,
             "timestamp": scan.timestamp.isoformat(),
-            "findings": json.loads(scan.findings_json),
-            "riskScores": json.loads(scan.risk_scores_json),
-            "cbom": json.loads(scan.cbom_json),
+            "findings": json.loads(scan.findings_json or '{}'),
+            "riskScores": json.loads(scan.risk_scores_json or '{}'),
+            "cbom": json.loads(scan.cbom_json or '{}'),
             "apiMetrics": json.loads(scan.api_metrics_json or '{}'),
             "webUrl": scan.web_url,
             "vpnUrl": scan.vpn_url,
@@ -140,7 +140,7 @@ def triad_scan(body: TriadScanRequest, db: Session = Depends(get_db)):
         overall_qvs=scan_results["riskScores"]["overall"],
     )
     db.add(scan_record)
-    db.commit()
+    with_retry(lambda: db.commit())
 
     log_audit_event({"action": "COMPLETE_TRIAD_SCAN", "scan_id": scan_results["id"], "qvs": scan_results["riskScores"]["overall"]})
 

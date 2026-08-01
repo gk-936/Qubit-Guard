@@ -42,13 +42,32 @@ The scanning engine categorizes cryptographic exposure across five infrastructur
 > They are never assigned an assumed score.
 
 ### 🔍 2. PQC-Aware Asset Discovery
-- **Certificate Transparency [LIVE]**: Queries `crt.sh` for certificates issued to the
-  target domain to surface subdomains not linked from the site.
-- **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers.
-  Almost always refused in practice, which is the correct result.
-- **Dictionary Probing [LIVE]**: Tries a 95-entry subdomain wordlist. **Every candidate
-  must resolve in DNS before it is reported** — unresolved guesses are discarded, not
-  listed as discovered assets.
+- **Certificate Transparency [LIVE]**: Queries **two independent CT log sources** —
+  `crt.sh` and Cert Spotter — for certificates issued to the target domain, so an
+  outage of either source doesn't silently drop this discovery channel.
+- **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers, and
+  separately records the nameservers themselves if they're on the same domain (e.g.
+  `ns1.pnb.bank.in`) — infrastructure invisible to every certificate-based method
+  since nameservers don't serve HTTPS.
+- **DNS Record Enumeration [LIVE]**: Queries the domain's real MX and TXT (SPF)
+  records and extracts any self-referencing hostnames — published infrastructure
+  data, not a guess.
+- **Historical Discovery [LIVE]**: Queries the Wayback Machine's archive for every
+  host ever crawled under the domain — the only method here that can surface a
+  subdomain that's no longer referenced anywhere current (decommissioned but
+  possibly still live), which every other method by definition cannot find.
+- **Reverse DNS [LIVE]**: PTR-looks-up the IP of every host already found (parallelized
+  across a thread pool), which can surface a hostname that was never in the wordlist,
+  a certificate, or a CT log.
+- **ASN/BGP IP-Range Discovery [LIVE]**: Looks up the IP address space the target
+  organization's own network actually announces (via RIPEstat's public routing data
+  API) and reverse-DNS sweeps a bounded sample. The only method that starts from
+  "what IP space does this org own" rather than a hostname guess. Yield varies
+  significantly by target — an organization hosted inside a shared ISP/cloud provider's
+  address space (common) will find little; one running its own dedicated network won't.
+- **Dictionary Probing [LIVE]**: Tries a 130+-entry subdomain wordlist. **Every
+  candidate must resolve in DNS before it is reported** — unresolved guesses are
+  discarded, not listed as discovered assets.
 - **Pillar Bucketing [STATIC]**: Discovered hosts are bucketed into Web/VPN/API by
   hostname keyword (`vpn.*`, `api.*`). This is a naming heuristic, not protocol detection,
   and is labelled "Inferred" in the output.

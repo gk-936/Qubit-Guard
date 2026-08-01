@@ -256,13 +256,23 @@ PQC_ALGORITHM_REGISTRY = {
 
 
 def get_algorithm(name: str) -> Union[dict, None]:
-    """Look up an algorithm by name or alias."""
+    """Look up an algorithm by family name, specific parameter set, or alias.
+
+    Matches in both directions: a short family name like "ML-KEM" must match
+    a specific parameter set like "ML-KEM-768", and vice versa. A one-directional
+    check (`name in key`) can only ever match when the query is the *shorter*
+    string — every caller in this codebase (ml_selector.select_algorithm's
+    output, e.g. "ML-KEM-768") passes the longer, more specific string, so a
+    one-directional check silently returned None for every real lookup.
+    """
     name_upper = name.upper().strip()
     for key, algo in PQC_ALGORITHM_REGISTRY.items():
-        if name_upper in key.upper():
+        key_upper = key.upper()
+        if key_upper in name_upper or name_upper in key_upper:
             return {**algo, "id": key}
         for alias in algo["aliases"]:
-            if name_upper in alias.upper():
+            alias_upper = alias.upper()
+            if alias_upper in name_upper or name_upper in alias_upper:
                 return {**algo, "id": key}
     return None
 

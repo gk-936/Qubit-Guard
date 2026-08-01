@@ -58,3 +58,8 @@ backend/.env
 # Project specific
 Trust_x_Software Requirement Specification(SRS)_Hackathon 2026.pdf (2).pdf
 index (2).html
+
+# Internal audit log — not part of the shipped app, stays local
+CODE_REVIEW.md
+
+graphify-out/

@@ -1,10 +1,10 @@
 import json
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
-from db import SessionLocal
+from db import SessionLocal, with_retry
 from models import Schedule, ScanResult
 from services.scanner_engine import perform_triad_scan
 from services.api_scanner import discover_endpoints
@@ -98,7 +98,13 @@ async def run_automated_scan_and_email(schedule_id: int):
         
         # 3. Update Schedule metadata
         schedule.last_run_at = datetime.utcnow()
-        db.commit()
+        if schedule.frequency == "once":
+            # Without this, a restart re-registers a "once" schedule as a fresh
+            # "next occurrence of HH:MM" job (register_schedule/start_worker only
+            # skip inactive schedules) — so a one-time scan would silently start
+            # firing again after every server restart.
+            schedule.is_active = False
+        with_retry(lambda: db.commit())
 
         # 4. Prepare scan_data for email
         # We need to map some fields to what the mail service expects
@@ -156,17 +162,39 @@ def register_schedule(schedule_obj: Schedule):
             args=[schedule_obj.id],
             id=job_id
         )
-    elif schedule_obj.frequency == "once":
-        # Run once at the specified time today (or tomorrow if time passed)
+    elif schedule_obj.frequency == "weekly":
+        # The UI offers no day-of-week picker, so "weekly" anchors to the
+        # weekday this job is (re-)registered on — either the day the
+        # schedule was created, or the day the server was last restarted.
+        # Previously this frequency matched no branch at all: the schedule
+        # row saved fine and the UI reported success, but no job was ever
+        # registered, so a "Weekly Compliance Pulse" schedule silently
+        # never ran.
         scheduler.add_job(
             run_automated_scan_and_email,
             'cron',
+            day_of_week=datetime.now().weekday(),
             hour=hour,
             minute=minute,
             args=[schedule_obj.id],
             id=job_id
         )
-    # Add more frequencies (weekly, etc.) if needed
+    elif schedule_obj.frequency == "once":
+        # A 'cron' trigger with only hour/minute set recurs every day —
+        # indistinguishable from "daily" — so a schedule the UI labels
+        # "Once (Scheduled Single Run)" was actually running forever. A
+        # 'date' trigger fires exactly once, at the next occurrence of the
+        # requested time (today if not yet passed, else tomorrow).
+        run_at = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if run_at <= datetime.now():
+            run_at += timedelta(days=1)
+        scheduler.add_job(
+            run_automated_scan_and_email,
+            'date',
+            run_date=run_at,
+            args=[schedule_obj.id],
+            id=job_id
+        )
 
 def start_worker():
     """Initializes and starts the background scheduler."""
