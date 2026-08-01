@@ -10,6 +10,7 @@ import socket
 import logging
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 from datetime import datetime
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ def search_mobile_apps(query: str = "") -> list:
 
 def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     """Fetch real app metadata from store APIs."""
-    metadata = {"version": "Unknown", "name": None, "size": "N/A"}
+    metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None}
 
     if platform == "iOS":
         # Apple iTunes Lookup API — public, reliable JSON API
@@ -107,6 +108,20 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
                     size_bytes = result.get("fileSizeBytes", 0)
                     if size_bytes:
                         metadata["size"] = f"{int(size_bytes) / (1024*1024):.1f} MB"
+                    # The developer's own listed website — a real, App Store-confirmed
+                    # anchor, and a far better basis for the API-domain probe below
+                    # than guessing "www.{bundle-id-segment}.com". Different apps with
+                    # different bundle IDs that happen to derive the same guessed
+                    # domain were previously returning identical results even when
+                    # they're unrelated apps (e.g. a white-label vendor's own site).
+                    seller_url = result.get("sellerUrl")
+                    if seller_url:
+                        try:
+                            host = urlparse(seller_url).hostname
+                            if host:
+                                metadata["seller_domain"] = host
+                        except ValueError:
+                            pass
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
             log.debug("iOS store metadata fetch failed for %s: %s", app_id, e)
     else:
@@ -135,24 +150,44 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     return metadata
 
 
-def _probe_app_api_tls(app_id: str) -> dict:
-    """Probe the app's likely API domain for TLS posture."""
-    parts = app_id.split(".")
-    api_domain = None
+def _probe_app_api_tls(app_id: str, known_domain: str = None) -> dict:
+    """Probe the app's likely API domain for TLS posture.
 
+    `known_domain` (the app's developer-listed website, from the App Store's own
+    metadata) is tried first when available — it's a confirmed anchor, not a
+    guess. Falling straight to guessing "www.{bundle-id-segment}.com" was
+    producing two kinds of wrong result: unrelated apps whose bundle IDs happen
+    to share a second segment collapsed onto the identical guessed domain and
+    returned identical findings, and white-label apps (built by a vendor for
+    many banks) got assessed against the *vendor's* corporate site instead of
+    the bank's, since the vendor's name is what's in the bundle ID.
+    """
+    candidates = []
+    domain_evidence = {}
+
+    if known_domain:
+        candidates.append(known_domain)
+        domain_evidence[known_domain] = "confirmed — App Store developer URL"
+
+    parts = app_id.split(".")
     if len(parts) >= 2 and parts[0] in ["com", "in", "org", "net"]:
         org = parts[1]  # e.g., "pnb"
-        candidates = [
+        for guess in [
             f"api.{org}.com", f"www.{org}.com", f"{org}.com",
             f"api.{org}.co.in", f"www.{org}.co.in", f"{org}.co.in",
-        ]
-        for candidate in candidates:
-            try:
-                socket.gethostbyname(candidate)
-                api_domain = candidate
-                break
-            except socket.gaierror:
-                continue
+        ]:
+            if guess not in domain_evidence:
+                candidates.append(guess)
+                domain_evidence[guess] = "guessed from the app's bundle ID, not confirmed"
+
+    api_domain = None
+    for candidate in candidates:
+        try:
+            socket.gethostbyname(candidate)
+            api_domain = candidate
+            break
+        except socket.gaierror:
+            continue
 
     if not api_domain:
         return {"reachable": False}
@@ -166,12 +201,14 @@ def _probe_app_api_tls(app_id: str) -> dict:
                 return {
                     "reachable": True,
                     "domain": api_domain,
+                    "domain_basis": domain_evidence[api_domain],
                     "cipher_name": cipher[0] if cipher else "Unknown",
                     "cipher_bits": cipher[2] if cipher else 0,
                     "tls_version": tls_version,
                 }
-    except Exception:
-        return {"reachable": False, "domain": api_domain}
+    except (OSError, ssl.SSLError, ValueError) as e:
+        log.debug("API TLS probe failed for %s: %s", api_domain, e)
+        return {"reachable": False, "domain": api_domain, "domain_basis": domain_evidence.get(api_domain)}
 
 
 def scan_mobile_app(app_id: str, platform: str) -> dict:
@@ -191,12 +228,14 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
         "pqc_score": None,  # None means "not assessed" until a probe succeeds or fails cleanly
     }
 
-    # 2. Probe the app's API domain for TLS posture
-    api_tls = _probe_app_api_tls(app_id)
+    # 2. Probe the app's API domain for TLS posture. Prefer the developer's
+    # App-Store-listed website (a confirmed anchor) over a guessed domain.
+    api_tls = _probe_app_api_tls(app_id, known_domain=store_meta.get("seller_domain"))
 
     if api_tls.get("reachable"):
         cipher_name = api_tls["cipher_name"]
         tls_version = api_tls["tls_version"]
+        domain_note = f" [{api_tls.get('domain_basis')}]" if api_tls.get("domain_basis") else ""
 
         pqc_detected = any(m in cipher_name.upper() for m in ["KYBER", "MLKEM", "ML-KEM", "DILITHIUM", "ML-DSA"])
 
@@ -204,7 +243,7 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
             results["findings"].append({
                 "severity": "info",
                 "issue": f"PQC-Ready API Backend: {cipher_name}",
-                "detail": f"App's API domain ({api_tls['domain']}) negotiated PQC-hybrid cipher: {cipher_name}.",
+                "detail": f"App's probed domain ({api_tls['domain']}{domain_note}) negotiated PQC-hybrid cipher: {cipher_name}.",
                 "recommendation": None,
             })
             results["pqc_score"] = 0
@@ -214,7 +253,7 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
             results["findings"].append({
                 "severity": "critical" if is_rsa else "high",
                 "issue": f"Classical Crypto on App Backend: {cipher_name}",
-                "detail": f"App's API domain ({api_tls['domain']}) uses {cipher_name} ({api_tls['cipher_bits']}-bit, {tls_version}). No PQC algorithms detected.",
+                "detail": f"App's probed domain ({api_tls['domain']}{domain_note}) uses {cipher_name} ({api_tls['cipher_bits']}-bit, {tls_version}). No PQC algorithms detected.",
                 "recommendation": "Integrate liboqs or Bouncy Castle PQC providers. Enable hybrid X25519MLKEM768 on the API gateway.",
             })
             results["pqc_score"] = 100 if is_rsa else 85
@@ -233,10 +272,11 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
         # never reached. This mirrors the same fix applied to the web pillar in
         # scanner_engine.py: an unreachable target yields no verdict, not a default one.
         domain_str = api_tls.get("domain", "not resolved")
+        basis_note = f" [{api_tls.get('domain_basis')}]" if api_tls.get("domain_basis") else ""
         results["findings"].append({
             "severity": "info",
             "issue": "App Backend API Unreachable — Not Assessed",
-            "detail": f"Could not probe the app's API backend ({domain_str}). No cryptographic findings are reported for this app because none were observed.",
+            "detail": f"Could not probe the app's API backend ({domain_str}{basis_note}). No cryptographic findings are reported for this app because none were observed.",
             "recommendation": "Verify the API domain resolves and is reachable, then re-run the scan. Provide the correct backend hostname if the automatic guess is wrong.",
         })
         results["pqc_score"] = None
