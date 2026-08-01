@@ -55,6 +55,7 @@ Findings below are recorded **as found**. The following have since been fixed in
 | 🆕 | Selector could pick an algorithm outside the requested pillar's family, contradicting its own rationale text | ✅ Fixed (pillar-consistency guard) |
 | 🆕 | "Weekly" schedule saved + showed success but registered no job — silently never ran | ✅ Fixed |
 | 🆕 | "Once" schedule used a recurring cron trigger — ran forever, not once | ✅ Fixed (`date` trigger + deactivates after firing) |
+| 🆕 | `POST /remediation/generate` is dead — no frontend caller | 🟢 Open (harmless, unused endpoint; `Remediation.jsx` uses `GET /data/remediation` instead) |
 | 12, 22, 25 | — | Open (playbook labelling, test suite, venv note — non-blocking for submission) |
 
 Two related defects were found and fixed while doing the above, because the Tier 1 changes would
@@ -79,6 +80,37 @@ Confirmed working, live, via `python main.py` + `npm run dev` + a real browser:
 - Report send correctly reports "generated but NOT sent" when SMTP times out (verified against real
   configured SMTP credentials, not a mock).
 - Seeded demo data is now empty of test noise (`scan_results` table cleared before handoff).
+
+---
+
+## Live end-to-end verification, round 2 (2026-08-01)
+
+A second sweep, prompted by "are there any issues now" and specific requests to check the
+Dashboard, PQC Selector, and Scheduler/Worker. Same standard as round 1: reproduce against the
+real running server (`python main.py`), not just `TestClient` or static reading.
+
+- **Dashboard crash**: reproduced the exact `TypeError` from `risk_scores.get("web", 100)` when a
+  pillar is `None`, then confirmed live via a synthetic scan row through `GET /api/data/dashboard`
+  that the fixed endpoint returns 200 with `null` posture values instead of a 500.
+- **PQC Selector enrichment**: confirmed live via `POST /api/pqc/select` that `algorithm_detail`
+  (FIPS standard, OID, family) was `None` on every call before the fix, and is now populated.
+- **PQC Selector family mismatch**: confirmed live that picking "Mobile"/"Firmware"/"Archival"
+  with the UI's default sliders (Server device, 1yr retention — sliders don't auto-adjust per
+  pillar) produced an algorithm from the wrong family with a rationale describing a *different*
+  algorithm than the one returned. Fixed and reconfirmed all 6 pillars now return a consistent
+  algorithm + rationale pair.
+- **Scheduler**: confirmed live (direct `register_schedule()` calls against the running
+  APScheduler instance) that a `"weekly"` schedule registered no job at all — `scheduler.get_job()`
+  returned `None` — while `"once"` registered a recurring `cron[hour=X,minute=Y]` trigger
+  indistinguishable from daily. Fixed and reconfirmed: weekly now registers a `cron` job with
+  `day_of_week` set, once now registers a genuine single-fire `date` trigger.
+- **Remediation AI chat**: sent a real message through `POST /api/remediation/chat` against the
+  live server with a configured `SARVAM_API_KEY` and got a real Sarvam AI response back — this
+  endpoint was already sound (honest "AI Expert Offline" with no key, typed error handling for
+  timeout/HTTP-error/other). No fix needed here.
+- Found and fixed one Python-version bug in my own first pass at the Selector fix: `Optional[int]`
+  had been written as the 3.10+ `int | None` union syntax, which would have crashed
+  `ml_selector.py` on import against the deployed Python 3.9 interpreter. Caught before commit.
 
 ---
 
