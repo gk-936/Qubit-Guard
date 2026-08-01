@@ -45,11 +45,17 @@ The scanning engine categorizes cryptographic exposure across five infrastructur
 - **Certificate Transparency [LIVE]**: Queries **two independent CT log sources** —
   `crt.sh` and Cert Spotter — for certificates issued to the target domain, so an
   outage of either source doesn't silently drop this discovery channel.
-- **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers.
-  Almost always refused in practice, which is the correct result.
+- **DNS Zone Transfer [LIVE]**: Attempts an AXFR against the domain's nameservers, and
+  separately records the nameservers themselves if they're on the same domain (e.g.
+  `ns1.pnb.bank.in`) — infrastructure invisible to every certificate-based method
+  since nameservers don't serve HTTPS.
 - **DNS Record Enumeration [LIVE]**: Queries the domain's real MX and TXT (SPF)
   records and extracts any self-referencing hostnames — published infrastructure
   data, not a guess.
+- **Historical Discovery [LIVE]**: Queries the Wayback Machine's archive for every
+  host ever crawled under the domain — the only method here that can surface a
+  subdomain that's no longer referenced anywhere current (decommissioned but
+  possibly still live), which every other method by definition cannot find.
 - **Reverse DNS [LIVE]**: PTR-looks-up the IP of every host already found, which can
   surface a hostname that was never in the wordlist, a certificate, or a CT log.
 - **Dictionary Probing [LIVE]**: Tries a 130+-entry subdomain wordlist. **Every
