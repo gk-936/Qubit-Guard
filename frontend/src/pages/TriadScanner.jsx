@@ -76,7 +76,7 @@ const TriadScanner = () => {
   const runTriadScan = async () => {
     setIsScanning(true);
     setShowResults(false);
-    setScanProgress('Running Triad scan...');
+    setScanProgress('Running Triad scan across 5 pillars — real network probes, can take up to 2-3 minutes...');
 
     try {
       const response = await apiRunScan({

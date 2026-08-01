@@ -168,15 +168,28 @@ _PROVENANCE_TABLES = [
 
 
 def ensure_schema():
-    """Idempotent migration for databases created before the 'source'
-    provenance column existed. Base.metadata.create_all() only creates
-    brand-new tables — it never adds columns to tables that already exist —
-    so pre-existing quantumshield.db files need this to pick up 'source'.
+    """Idempotent migration for databases whose on-disk schema has drifted
+    behind models.py. Base.metadata.create_all() only creates brand-new
+    tables — it never adds columns to tables that already exist — so any
+    pre-existing quantumshield.db file keeps whatever columns existed the
+    day it was first created, forever, unless something migrates it.
 
-    For each provenance table: if the 'source' column is missing, add it
-    (defaulting new/future rows to 'scan'), then immediately mark every row
-    that already exists at that moment as 'seed', since every row present
-    before this migration ran was inserted by the old seed script.
+    Two passes:
+      1. Provenance columns ('source' on the five seed/scan/manual tables,
+         see #18) — handled first since it also backfills existing rows.
+      2. Generic column drift — for every other model column missing from
+         its table on disk, ADD COLUMN it. Only columns the model declares
+         nullable are auto-added (existing rows get NULL, which is always a
+         legal value for them); a NOT NULL column that's missing needs a
+         real default decided by a human, so it's logged and skipped rather
+         than guessed at.
+
+    This exists because 'schedules' silently drifted five columns behind
+    its model (scheduled_time, email, report_type, is_active, last_run_at)
+    with nothing to catch it — the very first read of that table at startup
+    (the scheduler reloading active jobs) raised OperationalError and the
+    app failed to boot. Pass 2 makes that class of failure impossible to
+    reintroduce for any table.
     """
     with engine.begin() as conn:
         for table in _PROVENANCE_TABLES:
@@ -193,3 +206,23 @@ def ensure_schema():
                 # predates provenance tracking entirely, so it was seeded.
                 conn.execute(text(f"UPDATE {table} SET source='seed'"))
                 print(f"[MIGRATION] Added 'source' column to '{table}' and backfilled existing rows as 'seed'.")
+
+        for table_name, table in Base.metadata.tables.items():
+            db_cols = [row[1] for row in conn.execute(text(f"PRAGMA table_info({table_name})"))]
+            if not db_cols:
+                continue  # fresh table — create_all() already made it correctly
+            db_cols = set(db_cols)
+            for column in table.columns:
+                if column.name in db_cols:
+                    continue
+                if not column.nullable:
+                    log.warning(
+                        "ensure_schema: '%s.%s' is missing from the database but is "
+                        "NOT NULL in the model — skipping auto-migration; add it manually "
+                        "with an explicit default.",
+                        table_name, column.name,
+                    )
+                    continue
+                col_type = column.type.compile(dialect=engine.dialect)
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column.name} {col_type}"))
+                print(f"[MIGRATION] Added missing column '{table_name}.{column.name}' ({col_type}).")

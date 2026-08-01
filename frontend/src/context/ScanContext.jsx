@@ -41,6 +41,10 @@ export const ScanProvider = ({ children }) => {
   };
 
   useEffect(() => {
+    // Skip entirely when logged out — these are authenticated endpoints, and
+    // firing them anyway just produces a guaranteed 401 on every mount
+    // (including the login page itself) for no benefit.
+    if (!localStorage.getItem('pnc_token')) return;
     fetchHistory();
     if (activeScanId) {
       fetchScanDetail(activeScanId);

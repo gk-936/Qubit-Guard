@@ -112,5 +112,14 @@ app.include_router(pqc_selector.router, prefix="/api/pqc",        tags=["PQC Sel
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 5006))
-    print(f"[*] Starting backend on port {port}...")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # Auto-reload watches the whole backend/ tree by default, which includes
+    # backend/database/*.db*. In WAL mode SQLite writes to *.db-wal on every
+    # transaction, so the watcher sees constant "file changed" events and
+    # thrashes/restarts the worker mid-request — a real scan (multiple
+    # network probes, several seconds each) then hangs or times out client
+    # side instead of completing in the ~15s it takes standalone. Off by
+    # default; opt in for active development with RELOAD=true, and if you
+    # do, exclude backend/database/ from the watch.
+    reload_enabled = os.getenv("RELOAD", "false").strip().lower() == "true"
+    print(f"[*] Starting backend on port {port} (reload={reload_enabled})...")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=reload_enabled)

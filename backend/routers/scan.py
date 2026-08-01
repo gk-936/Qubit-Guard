@@ -77,17 +77,23 @@ def triad_scan(body: TriadScanRequest, db: Session = Depends(get_db)):
     discovered_assets = discovery_results.get("assets", [])
 
     # 3. Deep Multi-Host API Probing
-    # We probe the main API URL AND all discovered web-active subdomains
+    # We probe the main API URL AND a bounded set of discovered web-active
+    # subdomains. discover_endpoints() probes ~44 paths per host (worst case
+    # ~15s if every probe times out); a target with many real subdomains
+    # (a large bank, github.com in testing) can surface dozens of assets, and
+    # probing all of them serially turns one scan into minutes. Capped to
+    # keep total scan time bounded and predictable for the caller.
+    MAX_DEEP_PROBE_HOSTS = 6
     all_endpoints = []
     seen_endpoint_urls = set()
-    
+
     hosts_to_probe = [body.webUrl, body.apiUrl] if body.apiUrl else [body.webUrl]
     for asset in discovered_assets:
         if "Web/TLS" in asset.get("pillars", []):
             hosts_to_probe.append(asset["host"])
-    
-    # Run API discovery across the found surface area
-    for host in set(hosts_to_probe):
+
+    # Run API discovery across the found surface area (bounded)
+    for host in list(dict.fromkeys(hosts_to_probe))[:MAX_DEEP_PROBE_HOSTS]:
         if not host: continue
         res = discover_endpoints(host)
         for ep in res.get("details", []):

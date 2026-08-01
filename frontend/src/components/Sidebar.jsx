@@ -23,7 +23,7 @@ const Sidebar = () => {
     { id: 'mobile', icon: '📱', label: 'Mobile App Scanning' },
     { id: 'remediation', icon: '🔧', label: 'Auto-Remediation' },
     { id: 'qday', icon: '☢️', label: 'Q-Day Simulator' },
-    { id: 'pqc-selector', icon: '🧠', label: 'PQC Selector', badge: 'ML' },
+    { id: 'pqc-selector', icon: '🧠', label: 'PQC Selector', badge: 'RULES' },
   ];
 
   return (

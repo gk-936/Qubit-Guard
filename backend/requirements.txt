@@ -10,3 +10,5 @@ apscheduler==3.11.0
 python-multipart==0.0.20
 dnspython==2.6.1
 cryptography==42.0.5
+bcrypt==5.0.0
+reportlab==5.0.0

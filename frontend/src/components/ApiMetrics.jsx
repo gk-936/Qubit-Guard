@@ -17,7 +17,7 @@ const ApiMetrics = ({ data }) => {
   return (
     <div className="card">
       <div className="card-title">
-        <span className="ct-icon">🌐</span> API Discovery & Bucketing (AI-Analyzed)
+        <span className="ct-icon">🌐</span> API Discovery & Bucketing (HTTP-Probed)
       </div>
       <div className="grid-2" style={{ gap: '16px' }}>
         <div>

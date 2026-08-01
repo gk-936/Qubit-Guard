@@ -25,14 +25,22 @@ api.interceptors.request.use((config) => {
   return Promise.reject(error);
 });
 
-// The backend now rejects unauthenticated requests, so an expired token must send
-// the user back to login rather than failing silently on every page. Login itself
-// is excluded — a 401 there is a wrong password, not an expired session.
+// The backend now rejects unauthenticated requests, so an expired session must send
+// the user back to login rather than failing silently on every page. Two cases must
+// NOT trigger a reload, or every page that fetches data before login (e.g. ScanContext
+// loading scan history on mount) would 401, reload, remount, re-fetch, 401 again — an
+// infinite reload loop:
+//   1. Login itself — a 401 there is a wrong password, not an expired session.
+//   2. Any request that never carried a token in the first place — that's just an
+//      anonymous call made before the user is logged in, not a session that expired.
+// Only a request that DID send a token and got rejected anyway means the session is
+// genuinely dead and the user needs to be sent back to login.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const isLoginCall = (error.config?.url || '').includes('/auth/login');
-    if (error.response?.status === 401 && !isLoginCall) {
+    const hadToken = !!error.config?.headers?.Authorization;
+    if (error.response?.status === 401 && !isLoginCall && hadToken) {
       localStorage.removeItem('pnc_token');
       localStorage.removeItem('active_scan_id');
       window.location.reload();
@@ -43,7 +51,14 @@ api.interceptors.response.use(
 
 export const checkHealth = () => api.get('/health');
 
-export const runTriadScan = (data) => api.post('/scan/triad', data);
+// A Triad scan runs several real, sequential network probes per pillar (TLS
+// handshakes, IKE port checks, HTTP HEAD requests) — on a target with a closed
+// or filtered VPN/firmware/archival surface, each probe can legitimately run
+// its full multi-second timeout rather than fail fast, so total scan time
+// varies a lot by target and can exceed the 60s default used elsewhere.
+// Only this call gets the longer timeout so a genuinely broken/hanging
+// endpoint elsewhere still fails fast for the user.
+export const runTriadScan = (data) => api.post('/scan/triad', data, { timeout: 180000 });
 export const getScanHistory = () => api.get('/scan/history');
 export const getScanById = (id) => api.get(`/scan/${id}`);
 

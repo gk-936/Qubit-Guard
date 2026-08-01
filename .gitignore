@@ -47,6 +47,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+.playwright-mcp/
 *.swo
 
 # Environment Variables
