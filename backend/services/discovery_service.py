@@ -34,8 +34,10 @@ COMMON_SUBDOMAINS = [
     "media", "db", "database", "sql", "redis", "elastic", "cloud", "aws", 
     "azure", "gcp", "iot", "edge", "proxy", "lb", "balancer",
     # Banking Specific (Added for higher discovery depth)
-    "netbanking", "online", "pib", "mbs", "corp", "ebank", "payment", "card", 
+    "netbanking", "online", "pib", "mbs", "corp", "ebank", "payment", "card",
     "loan", "mortgage", "invest", "wealth", "trade", "b2b", "swift", "rtgs",
+    "ibanking", "internetbanking", "upi", "netbank", "neft", "imps", "kyc",
+    "atm", "branch", "digital", "wallet", "recharge", "insurance",
     # Business & Apps
     "shop", "blog", "news", "support", "help", "docs", "kb", "wiki", "remote",
     "desktop", "meet", "chat", "office", "hr", "admin", "manage", "billing"
@@ -168,7 +170,12 @@ def probe_host(host: str, base_domain: str) -> dict:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE  # Discovery mode: accept all certs to extract data
         
-        with socket.create_connection((host, 443), timeout=1) as sock:
+        # This is the probe that gates whether a candidate is counted as "found" at
+        # all — 1s was too tight under 30-way concurrent load (a full TCP+TLS
+        # handshake needs multiple round trips) and was very likely undercounting
+        # real, live subdomains rather than correctly excluding dead ones. Matches
+        # the timeout the Triad Scanner itself uses for the same operation.
+        with socket.create_connection((host, 443), timeout=4) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
