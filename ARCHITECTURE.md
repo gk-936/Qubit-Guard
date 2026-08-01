@@ -7,7 +7,7 @@ maps each tier to the actual modules in the repo.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  PRESENTATION TIER — React 18 + Vite (localhost:5173)        │
+│  PRESENTATION TIER — React 19 + Vite (localhost:5173)        │
 │  frontend/src/                                               │
 └───────────────────────────┬────────────────────────────────┘
                              │ HTTPS/HTTP + JSON
