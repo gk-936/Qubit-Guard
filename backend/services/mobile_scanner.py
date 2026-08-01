@@ -62,17 +62,31 @@ def search_mobile_apps(query: str = "") -> list:
             for item in data.get("results", []):
                 app_name = item.get("trackName", "")
                 bundle_id = item.get("bundleId", "")
+                developer = item.get("artistName", "Unknown")
+
+                # iTunes' search does its own fuzzy/related matching internally and
+                # will return apps with no textual connection to the query at all —
+                # confirmed live: searching "PNB" returned Gmail, PhonePe, Airtel,
+                # among others, none of which mention "PNB" anywhere. Apple doesn't
+                # explain why (probably genre/popularity backfill on a short query),
+                # so rather than trying to out-guess it, drop anything that doesn't
+                # actually contain the search term in name, bundle ID, OR developer.
+                # This applies to any query, not just PNB.
+                name_match = query.lower() in app_name.lower() or query.lower() in bundle_id.lower()
+                dev_match = query.lower() in developer.lower()
+                if not (name_match or dev_match):
+                    continue
 
                 # Heuristic classification, not a verified developer identity check —
-                # there is no whitelist of PNB's actual developer IDs to match against.
-                # "Official" only means the search term appears in the name/bundle ID.
-                name_match = query.lower() in app_name.lower() or query.lower() in bundle_id.lower()
+                # there is no whitelist of each bank's actual developer IDs to match
+                # against. "Official" only means the search term appears in the
+                # name/bundle ID; "Verified" means only the developer name matched.
                 status = "Official" if name_match else "Verified"
                 status_basis = (
                     f'App name or bundle ID contains the search term "{query}".'
                     if name_match else
-                    f'Returned by an App Store search for "{query}"; name/bundle ID did '
-                    f'not match, so this is not confirmed as the bank\'s own listing.'
+                    f'Developer name ("{developer}") contains the search term "{query}", '
+                    f'but the app name/bundle ID did not — not confirmed as an official listing.'
                 )
 
                 # userRatingCount distinguishes "no ratings yet" from "rated 0/5" —
@@ -88,7 +102,7 @@ def search_mobile_apps(query: str = "") -> list:
                     "status_basis": status_basis,
                     "rating": rating,
                     "rating_count": rating_count,
-                    "developer": item.get("artistName", "Unknown"),
+                    "developer": developer,
                     "source": "itunes-search",
                 })
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
@@ -119,7 +133,7 @@ def search_mobile_apps(query: str = "") -> list:
 
 def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     """Fetch real app metadata from store APIs."""
-    metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None, "seller_domain_basis": None}
+    metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None, "seller_domain_basis": None, "seller_name": None}
 
     if platform == "iOS":
         # Apple iTunes Lookup API — public, reliable JSON API
@@ -155,6 +169,7 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
                     # (confirmed: Punjab National Bank's own "PNB ONE" app has none).
                     # sellerName is still real, Apple-confirmed data — check it against
                     # the small curated list above before giving up to a bundle-ID guess.
+                    metadata["seller_name"] = result.get("sellerName")
                     if not metadata["seller_domain"]:
                         seller_name = (result.get("sellerName") or "").strip().lower()
                         for bank_name, domain in KNOWN_BANK_DOMAINS.items():
@@ -190,7 +205,54 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     return metadata
 
 
-def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis: str = None) -> dict:
+def _guess_domains_from_seller_name(seller_name: str) -> list:
+    """Build domain candidates from the App Store's confirmed developer name.
+
+    Generic — not limited to the banks in KNOWN_BANK_DOMAINS — so a bank
+    outside that curated list still gets a real shot at resolving to its
+    actual domain, instead of falling straight to guessing off the bundle ID
+    (an app's package identifier is an arbitrary developer choice; the
+    App-Store-listed company name is real, confirmed data and a better basis
+    to guess from, even though it's still ultimately a guess, not confirmed).
+    """
+    if not seller_name:
+        return []
+
+    stopwords = {"the", "of", "and", "ltd", "limited", "pvt", "private", "co", "inc", "corp", "corporation"}
+    words = [w for w in re.split(r"[^a-zA-Z]+", seller_name) if w]
+    significant = [w for w in words if w.lower() not in stopwords]
+    if not significant:
+        return []
+
+    # Try the company's own first significant word FIRST — many Indian banks
+    # (HDFC, ICICI, SBI...) are already known by a short brand-name/initialism
+    # that IS the word itself, not a further abbreviation of "{Word} Bank Ltd".
+    # An acronym-of-an-acronym here is actively dangerous: "HDFC Bank Ltd" would
+    # otherwise abbreviate to "hbl", which happens to be a real, unrelated bank
+    # (Habib Bank Limited) — a coincidental collision, not a fabricated result,
+    # but one worth avoiding by trying the safer guess first.
+    first_word = significant[0].lower()
+
+    # Second: a real acronym built from all significant words (stopwords like
+    # "Bank"/"Ltd" excluded) — this is what "Punjab National Bank" -> "pnb"
+    # needs, since neither significant word alone gets there.
+    acronym = "".join(w[0] for w in significant).lower()
+
+    guesses = []
+    for base in dict.fromkeys([first_word, acronym]):  # dedupe, keep order
+        if len(base) < 2:
+            continue
+        guesses.extend([
+            f"{base}.com", f"www.{base}.com",
+            f"{base}.in", f"www.{base}.in",
+            f"{base}bank.com", f"www.{base}bank.com",
+            f"{base}india.in", f"www.{base}india.in",
+            f"{base}.co.in", f"www.{base}.co.in",
+        ])
+    return guesses
+
+
+def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis: str = None, seller_name: str = None) -> dict:
     """Probe the app's likely API domain for TLS posture.
 
     `known_domain` (from the App Store's own metadata — either the developer's
@@ -209,6 +271,14 @@ def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis
     if known_domain:
         candidates.append(known_domain)
         domain_evidence[known_domain] = known_domain_basis or "confirmed"
+
+    # Second tier: guess from the confirmed developer name (works for any bank,
+    # not just the ones in KNOWN_BANK_DOMAINS) — tried before the weaker
+    # bundle-ID guess below, since the developer name is real, confirmed data.
+    for guess in _guess_domains_from_seller_name(seller_name):
+        if guess not in domain_evidence:
+            candidates.append(guess)
+            domain_evidence[guess] = f'guessed from the App Store developer name ("{seller_name}"), not confirmed'
 
     parts = app_id.split(".")
     if len(parts) >= 2 and parts[0] in ["com", "in", "org", "net"]:
@@ -270,11 +340,13 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
     }
 
     # 2. Probe the app's API domain for TLS posture. Prefer a confirmed anchor
-    # (developer's listed website, or a curated bank-name match) over a guess.
+    # (developer's listed website, or a curated bank-name match), then a
+    # developer-name-derived guess (works for any bank), then a bundle-ID guess.
     api_tls = _probe_app_api_tls(
         app_id,
         known_domain=store_meta.get("seller_domain"),
         known_domain_basis=store_meta.get("seller_domain_basis"),
+        seller_name=store_meta.get("seller_name"),
     )
 
     if api_tls.get("reachable"):
