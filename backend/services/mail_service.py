@@ -139,48 +139,57 @@ def _extract_bank_name(url: str) -> str:
     """Extract bank name from URL, ignoring test/staging subdomains."""
     if not url:
         return "Organization"
-    
-    # Common bank domain patterns
+
+    # Common bank domain patterns. Matched against the DOMAIN only (see below),
+    # never the raw URL string — matching the full URL let query strings and
+    # paths trigger false positives (e.g. "?ref=yesbank-promo" on an unrelated
+    # site). "yes" was also narrowed to "yesbank": as a bare 3-letter pattern
+    # it matched inside ordinary English substrings — confirmed false positives
+    # on "eyestest.com" and "myeservices.co.in", both reported as "YES Bank".
     bank_patterns = {
         "pnb": "Punjab National Bank",
         "manipur": "Manipur Bank",
         "manipurbank": "Manipur Bank",
-        "boi": "Bank of India",
-        "bob": "Bank of Baroda",
+        "bankofindia": "Bank of India",
+        "bankofbaroda": "Bank of Baroda",
         "sbi": "State Bank of India",
         "hdfc": "HDFC Bank",
         "icici": "ICICI Bank",
         "axis": "Axis Bank",
         "kotak": "Kotak Mahindra Bank",
-        "yes": "YES Bank",
+        "yesbank": "YES Bank",
     }
-    
+
     # Subdomains to skip (test, staging, dev, etc.)
     skip_subdomains = ["test", "staging", "dev", "demo", "sandbox", "qa", "uat"]
-    
-    url_lower = url.lower()
-    for pattern, bank_name in bank_patterns.items():
-        if pattern in url_lower:
-            return bank_name
-    
-    # Extract domain name carefully, ignoring test/staging subdomains
+
+    # Extract the domain first — every match below is checked against this,
+    # never the full URL (scheme/path/query), which is where the false
+    # positives above came from.
     try:
         from urllib.parse import urlparse
         domain = urlparse(url).netloc or url
         domain = domain.replace("www.", "")
         parts = domain.split(".")
-        
-        # Skip test/staging prefix subdomains
-        for i, part in enumerate(parts[:-2]):  # Check all parts except TLD and main domain
-            if part in skip_subdomains and i + 1 < len(parts):
-                # Use the next part as the domain name
-                return parts[i + 1].title() + " Bank"
-        
-        # Use first part if no skip pattern found
-        return parts[0].title() + " Bank"
     except (IndexError, AttributeError, ValueError) as e:
         log.warning("Failed to derive bank name from URL %r: %s", url, e, exc_info=True)
         return "Organization"
+
+    domain_lower = domain.lower()
+    # Longest pattern first so a more specific match always wins over a
+    # shorter one that happens to be its prefix/substring.
+    for pattern in sorted(bank_patterns, key=len, reverse=True):
+        if pattern in domain_lower:
+            return bank_patterns[pattern]
+
+    # No known bank matched — fall back to the domain's own label, ignoring
+    # test/staging prefix subdomains.
+    for i, part in enumerate(parts[:-2]):  # Check all parts except TLD and main domain
+        if part in skip_subdomains and i + 1 < len(parts):
+            # Use the next part as the domain name
+            return parts[i + 1].title() + " Bank"
+
+    return parts[0].title() + " Bank" if parts and parts[0] else "Organization"
 
 
 def _generate_executive_report(risk_scores: dict, findings: dict, components: list, timestamp: datetime, bank_name: str = "Organization", **kwargs) -> str:

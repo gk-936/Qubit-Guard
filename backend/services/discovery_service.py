@@ -365,8 +365,13 @@ def discover_pnb_assets(target_base: str) -> dict:
 def fetch_mobile_apps_for_discovery(domain: str) -> list:
     """Helper to find mobile apps relevant to the domain."""
     from services.mobile_scanner import search_mobile_apps
-    # Extract organization keyword (e.g., 'pnb' from 'pnb.bank.in')
-    org = domain.split('.')[0]
+    # Extract organization keyword (e.g., 'pnb' from 'www.pnb.bank.in').
+    # Strip the "www" label first — scanning "www.pnb.bank.in" (a completely
+    # normal way to type a target) otherwise took the FIRST label as the
+    # organization keyword and searched the App Store for "www" itself,
+    # returning unrelated apps (confirmed: returned WWE wrestling games).
+    labels = [p for p in domain.lower().split('.') if p and p != "www"]
+    org = labels[0] if labels else domain
     apps = search_mobile_apps(org)
     return [
         {
