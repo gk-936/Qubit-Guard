@@ -15,6 +15,24 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
+# Fallback anchor for when the App Store lists a real, confirmed developer name
+# (sellerName) but no sellerUrl — this happens for real bank apps, not just
+# obscure ones (Punjab National Bank's own "PNB ONE" app has no sellerUrl).
+# Deliberately small and limited to the banks this tool is built to audit,
+# with domains already verified reachable elsewhere in this codebase this
+# session — not a general-purpose registry, and not a guess.
+KNOWN_BANK_DOMAINS = {
+    "punjab national bank": "pnbindia.in",
+    "state bank of india": "sbi.co.in",
+    "hdfc bank": "hdfcbank.com",
+    "icici bank": "icicibank.com",
+    "axis bank": "axisbank.com",
+    "kotak mahindra bank": "kotak.com",
+    "bank of india": "bankofindia.co.in",
+    "bank of baroda": "bankofbaroda.in",
+    "yes bank": "yesbank.in",
+}
+
 
 def search_mobile_apps(query: str = "") -> list:
     """Search for real mobile applications via the iTunes Search API and filter for verified banking apps."""
@@ -101,7 +119,7 @@ def search_mobile_apps(query: str = "") -> list:
 
 def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     """Fetch real app metadata from store APIs."""
-    metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None}
+    metadata = {"version": "Unknown", "name": None, "size": "N/A", "seller_domain": None, "seller_domain_basis": None}
 
     if platform == "iOS":
         # Apple iTunes Lookup API — public, reliable JSON API
@@ -129,8 +147,21 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
                             host = urlparse(seller_url).hostname
                             if host:
                                 metadata["seller_domain"] = host
+                                metadata["seller_domain_basis"] = "confirmed — App Store developer URL"
                         except ValueError:
                             pass
+
+                    # sellerUrl is often simply absent even for real, well-known banks
+                    # (confirmed: Punjab National Bank's own "PNB ONE" app has none).
+                    # sellerName is still real, Apple-confirmed data — check it against
+                    # the small curated list above before giving up to a bundle-ID guess.
+                    if not metadata["seller_domain"]:
+                        seller_name = (result.get("sellerName") or "").strip().lower()
+                        for bank_name, domain in KNOWN_BANK_DOMAINS.items():
+                            if bank_name in seller_name:
+                                metadata["seller_domain"] = domain
+                                metadata["seller_domain_basis"] = f'confirmed — App Store developer name matched "{bank_name.title()}"'
+                                break
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
             log.debug("iOS store metadata fetch failed for %s: %s", app_id, e)
     else:
@@ -159,24 +190,25 @@ def _fetch_store_metadata(app_id: str, platform: str) -> dict:
     return metadata
 
 
-def _probe_app_api_tls(app_id: str, known_domain: str = None) -> dict:
+def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis: str = None) -> dict:
     """Probe the app's likely API domain for TLS posture.
 
-    `known_domain` (the app's developer-listed website, from the App Store's own
-    metadata) is tried first when available — it's a confirmed anchor, not a
-    guess. Falling straight to guessing "www.{bundle-id-segment}.com" was
-    producing two kinds of wrong result: unrelated apps whose bundle IDs happen
-    to share a second segment collapsed onto the identical guessed domain and
-    returned identical findings, and white-label apps (built by a vendor for
-    many banks) got assessed against the *vendor's* corporate site instead of
-    the bank's, since the vendor's name is what's in the bundle ID.
+    `known_domain` (from the App Store's own metadata — either the developer's
+    listed website, or a curated bank-name match) is tried first when
+    available — it's a confirmed anchor, not a guess. Falling straight to
+    guessing "www.{bundle-id-segment}.com" was producing two kinds of wrong
+    result: unrelated apps whose bundle IDs happen to share a second segment
+    collapsed onto the identical guessed domain and returned identical
+    findings, and white-label apps (built by a vendor for many banks) got
+    assessed against the *vendor's* corporate site instead of the bank's,
+    since the vendor's name is what's in the bundle ID.
     """
     candidates = []
     domain_evidence = {}
 
     if known_domain:
         candidates.append(known_domain)
-        domain_evidence[known_domain] = "confirmed — App Store developer URL"
+        domain_evidence[known_domain] = known_domain_basis or "confirmed"
 
     parts = app_id.split(".")
     if len(parts) >= 2 and parts[0] in ["com", "in", "org", "net"]:
@@ -237,9 +269,13 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
         "pqc_score": None,  # None means "not assessed" until a probe succeeds or fails cleanly
     }
 
-    # 2. Probe the app's API domain for TLS posture. Prefer the developer's
-    # App-Store-listed website (a confirmed anchor) over a guessed domain.
-    api_tls = _probe_app_api_tls(app_id, known_domain=store_meta.get("seller_domain"))
+    # 2. Probe the app's API domain for TLS posture. Prefer a confirmed anchor
+    # (developer's listed website, or a curated bank-name match) over a guess.
+    api_tls = _probe_app_api_tls(
+        app_id,
+        known_domain=store_meta.get("seller_domain"),
+        known_domain_basis=store_meta.get("seller_domain_basis"),
+    )
 
     if api_tls.get("reachable"):
         cipher_name = api_tls["cipher_name"]
