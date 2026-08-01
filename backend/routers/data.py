@@ -274,13 +274,26 @@ def get_cbom(request: Request, db: Session = Depends(get_db)):
         scan = db.query(ScanResult).filter(ScanResult.scan_id == scan_id).first()
         if scan:
             cbom = json.loads(scan.cbom_json or '{}')
+            def _risk_from_quantum_safe(qs):
+                # qs is None for a pillar with zero findings (never assessed —
+                # e.g. the API pillar with no JWT supplied), not "definitely
+                # vulnerable". `"Critical" if not qs else "Safe"` collapsed
+                # both False and None into "Critical", mislabeling an
+                # unassessed component as the worst possible risk. Found
+                # while verifying the Posture-page CBOM field-mapping fix
+                # (same "None means not assessed" pattern already fixed
+                # elsewhere in this file for the dashboard posture calc).
+                if qs is None:
+                    return "Not Assessed"
+                return "Safe" if qs else "Critical"
+
             cbom_items = [
                 {
                     "component": c["name"],
                     "version": c.get("version", ""),
                     "algorithm": c.get("crypto", "Unknown"),
                     "quantumSafe": c.get("quantumSafe", False),
-                    "risk": "Critical" if not c.get("quantumSafe") else "Safe",
+                    "risk": _risk_from_quantum_safe(c.get("quantumSafe")),
                     "category": c.get("type", "TLS"),
                     "purl": f"pkg:triad/{c['name']}@{c.get('version', '0.0.0')}",
                     "source": "scan",
