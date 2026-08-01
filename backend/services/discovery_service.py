@@ -55,14 +55,21 @@ def generate_permutations(found_sub: str):
 def check_zone_transfer(domain: str) -> list:
     """
     --- 6. The Jackpot: Automated Zone Transfer Check ---
-    Attempts to download the entire DNS zone map (AXFR).
+    Attempts to download the entire DNS zone map (AXFR). Also harvests the
+    nameserver hostnames themselves: an organization that runs its own DNS
+    (e.g. "ns1.pnb.bank.in" instead of an outsourced registrar's
+    nameserver) is a real, currently-resolving asset, and the NS lookup
+    needed for the AXFR attempt already has it in hand — this was being
+    thrown away before.
     """
     discovered = []
     try:
         # Get NS records for the domain
         ns_query = dns.resolver.resolve(domain, 'NS')
         for ns in ns_query:
-            ns_host = str(ns.target)
+            ns_host = str(ns.target).rstrip('.')
+            if domain in ns_host:
+                discovered.append(ns_host)
             try:
                 # dns.query.xfr requires a literal IP address — passing the
                 # nameserver's hostname raises a bare ValueError. Resolve it first.
@@ -121,9 +128,50 @@ def scrape_web_hints(url: str) -> list:
             matches = re.findall(r'https?://([a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z]{2,})', content.lower())
             for m in matches:
                 hints.add(m)
+
+        # Check sitemap.xml — same idea as robots.txt, different real file
+        # sites publish that routinely links to other subdomains (a CDN
+        # host for images, a separate blog/support subdomain, etc.).
+        sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
+        with urllib.request.urlopen(sitemap_url, timeout=2) as resp:
+            content = resp.read().decode('utf-8', errors='ignore')
+            matches = re.findall(r'https?://([a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z]{2,})', content.lower())
+            for m in matches:
+                hints.add(m)
     except (urllib.error.URLError, OSError) as e:
         log.debug("Web hint scrape failed for %s: %s", url, e)
     return list(hints)
+
+def fetch_wayback_hosts(domain: str) -> list:
+    """
+    --- 8. Historical discovery via the Wayback Machine ---
+    Every method above only finds what's *currently* live (a subdomain has
+    to be resolving right now, or hold a currently/previously-issued
+    certificate, to show up in CT logs, DNS, or a live scrape). archive.org's
+    free CDX API instead returns every unique host it has ever crawled and
+    archived under this domain, including subdomains that were decommissioned
+    and stopped resolving years ago. A forgotten-but-still-live legacy
+    system is exactly the kind of asset a security audit is supposed to
+    catch, and none of the other methods here can find one that's no longer
+    referenced anywhere current.
+    """
+    discovered = set()
+    try:
+        url = (
+            f"https://web.archive.org/cdx/search/cdx?url=*.{domain}"
+            f"&output=json&fl=original&collapse=urlkey&limit=2000"
+        )
+        req = urllib.request.Request(url, headers={'User-Agent': 'QuantumShield-OSINT/1.0'})
+        with urllib.request.urlopen(req, timeout=6) as response:
+            rows = json.loads(response.read().decode('utf-8'))
+            # First row is the header (["original"]); skip it.
+            for row in rows[1:] if rows else []:
+                host = urlparse(row[0]).hostname
+                if host and domain in host:
+                    discovered.add(host.lower())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, IndexError) as e:
+        log.debug("Wayback Machine query failed for %s: %s", domain, e)
+    return list(discovered)
 
 def fetch_ct_logs(domain: str) -> list:
     """
@@ -410,6 +458,12 @@ def discover_pnb_assets(target_base: str) -> dict:
     for hint_host in dns_hint_results:
         targets_to_probe.add(hint_host)
 
+    # 6. Historical discovery — hosts that used to exist and may still
+    # resolve/respond even though nothing currently live references them.
+    wayback_results = fetch_wayback_hosts(base_domain)
+    for wb_host in wayback_results:
+        targets_to_probe.add(wb_host)
+
     discovered_assets = []
     seen_hosts = set()
 
@@ -477,10 +531,10 @@ def discover_pnb_assets(target_base: str) -> dict:
         "total_found": len(discovered_assets),
         "axfr_success": len(axfr_results) > 0,
         "notes": (
-            f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR records. "
+            f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR/NS records. "
             f"{len(ct_results)} CT-log hosts (crt.sh + Cert Spotter). {len(dns_hint_results)} "
-            f"MX/TXT-derived hosts. {len(san_hosts)} SAN-derived hosts. {len(ptr_hosts)} "
-            f"reverse-DNS-derived hosts."
+            f"MX/TXT-derived hosts. {len(wayback_results)} Wayback-Machine-derived hosts. "
+            f"{len(san_hosts)} SAN-derived hosts. {len(ptr_hosts)} reverse-DNS-derived hosts."
         ),
         "mobile_apps": fetch_mobile_apps_for_discovery(base_domain)
     }
