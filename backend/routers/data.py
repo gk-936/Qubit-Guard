@@ -10,6 +10,7 @@ from db import get_db, with_retry
 from models import DashboardSummary, InventoryStat, PostureStat, CbomVulnerabilitySummary, CbomItem, ScanResult
 from services.cbom_generator import generate_cyclonedx
 from services.mail_service import send_scan_report, send_scan_report_async, generate_professional_pdf, _extract_bank_name
+from services.audit_service import log_audit_event
 from pydantic import BaseModel
 
 class EmailRequest(BaseModel):
@@ -256,6 +257,7 @@ def delete_asset(purl: str, db: Session = Depends(get_db)):
         deleted_purl = item.purl
         db.delete(item)
         with_retry(lambda: db.commit())
+        log_audit_event({"action": "INVENTORY_DELETE", "purl": deleted_purl})
         return {"success": True, "message": f"Asset {deleted_purl} removed successfully."}
 
     return JSONResponse(
@@ -489,6 +491,7 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         success, detail = False, "SMTP_TIMEOUT"
 
     if success:
+        log_audit_event({"action": "REPORT_SEND", "email": req.email, "report_type": req.reportType, "delivered": True})
         return {
             "success": True,
             "delivered": True,
@@ -504,6 +507,7 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         "SMTP_TIMEOUT":   "the SMTP server did not respond within 10 seconds.",
     }
     reason = reasons.get(str(detail), f"SMTP error: {detail}")
+    log_audit_event({"action": "REPORT_SEND", "email": req.email, "report_type": req.reportType, "delivered": False, "reason_code": str(detail)})
     return {
         "success": False,
         "delivered": False,
@@ -529,6 +533,7 @@ def add_inventory_item(body: InventoryItemRequest, db: Session = Depends(get_db)
     db.add(new_item)
     with_retry(lambda: db.commit())
     db.refresh(new_item)
+    log_audit_event({"action": "INVENTORY_ADD", "purl": new_item.purl, "component": new_item.component})
     return {"success": True, "message": "Asset added successfully."}
 
 
