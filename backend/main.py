@@ -26,7 +26,7 @@ PROTECTED = [Depends(require_auth)]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: create tables, migrate existing DBs, & seed
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine,checkfirst=True)
     ensure_schema()
     seed()
 
