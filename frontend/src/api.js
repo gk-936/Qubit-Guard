@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = '/api';
+// Use the environment variable if available, otherwise fall back to local proxy
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,7 +10,6 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
-
 // Request interceptor to add scan ID context
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('pnc_token');
