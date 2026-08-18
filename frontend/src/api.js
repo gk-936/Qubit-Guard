@@ -1,7 +1,10 @@
 import axios from 'axios';
 
-// Use the environment variable if available, otherwise fall back to local proxy
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+// 1. Get the base URL from env (e.g., https://qubit-guard.onrender.com)
+const ENV_BASE = import.meta.env.VITE_API_URL || '';
+
+// 2. Always append '/api' to match your FastAPI router prefix
+const API_BASE_URL = ENV_BASE ? `${ENV_BASE}/api` : '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
