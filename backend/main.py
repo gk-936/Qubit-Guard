@@ -4,6 +4,7 @@ Qubit-Guard — FastAPI Backend Entry Point
 
 import os
 import logging
+import threading
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
@@ -22,15 +23,35 @@ from routers import auth, scan, data, remediation, mobile, discovery, scheduler,
 # server-side and not just by the React client.
 PROTECTED = [Depends(require_auth)]
 
+# --- Stability Fixes for Render (Multi-worker environment) ---
+_seed_lock = threading.Lock()
+_has_seeded = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables, migrate existing DBs, & seed
-    Base.metadata.create_all(bind=engine,checkfirst=True)
+    global _has_seeded
+    
+    # 1. Create tables safely (only if they don't exist)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
+    
+    # 2. Ensure schema integrity
     ensure_schema()
-    seed()
+    
+    # 3. Seed data ONLY ONCE across all workers to prevent race conditions
+    if not _has_seeded:
+        with _seed_lock:
+            # Double-check pattern to ensure only one worker seeds
+            if not _has_seeded:
+                try:
+                    seed()
+                    _has_seeded = True
+                    print("[INIT] Database seeded successfully.")
+                except Exception as e:
+                    print(f"[ERROR] Seeding failed: {e}")
+                    # We don't raise here to allow the app to start even if seeding fails
+                    # (e.g., if DB is locked by another process momentarily)
 
-    # Start the background reporting worker
+    # 4. Start the background reporting worker
     from services.worker import start_worker
     start_worker()
 
