@@ -12,25 +12,48 @@ from services.cbom_generator import generate_triad_cbom
 from services.remediation_service import generate_triad_remediation
 from services.discovery_service import discover_pnb_assets
 from services.mail_service import send_scan_report
+from services import report_service
 
 log = logging.getLogger(__name__)
 
 # Global scheduler instance
 scheduler = AsyncIOScheduler()
 
+# Minimum gap between two runs of the SAME schedule before a second trigger is
+# treated as a duplicate rather than a genuine re-fire. Guards against the one
+# scenario APScheduler itself can't fully prevent: this job function being
+# invoked twice in quick succession (e.g. a schedule registered twice by a
+# bug elsewhere, or a misfire replay landing seconds after a normal fire).
+# A legitimate "daily"/"weekly" re-run is always far larger than this.
+_MIN_RERUN_GAP = timedelta(minutes=2)
+
+
 async def run_automated_scan_and_email(schedule_id: int):
     """
     Background job:
     1. Triggers a fresh triad scan
     2. Persists the result
-    3. Sends the email report
+    3. Sends the email report — ONLY if that fresh scan actually produced a
+       measured result. Never emails a stale scan pulled from the database;
+       the scan performed in step 1, right here, right now, is the only data
+       this function ever sends.
     """
-    print(f"[WORKER] Starting scheduled scan for schedule ID: {schedule_id}")
+    fire_time = datetime.utcnow()
+    print(f"[WORKER] Starting scheduled scan for schedule ID: {schedule_id} at {fire_time.isoformat()}")
     db: Session = SessionLocal()
     try:
         schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
         if not schedule or not schedule.is_active:
             print(f"[WORKER] Schedule {schedule_id} not found or inactive.")
+            return
+
+        # Duplicate-run guard: if this exact schedule already ran within the
+        # last _MIN_RERUN_GAP, this invocation is a duplicate trigger, not a
+        # legitimate new fire (a real daily/weekly cadence is always hours to
+        # days apart) — skip it rather than scanning and emailing twice.
+        if schedule.last_run_at and (fire_time - schedule.last_run_at) < _MIN_RERUN_GAP:
+            print(f"[WORKER] Schedule {schedule_id} already ran at {schedule.last_run_at.isoformat()} "
+                  f"({(fire_time - schedule.last_run_at).total_seconds():.0f}s ago) — skipping duplicate trigger.")
             return
 
         targets = json.loads(schedule.targets_json)
@@ -92,12 +115,17 @@ async def run_automated_scan_and_email(schedule_id: int):
             risk_scores_json=json.dumps(scan_results["riskScores"]),
             cbom_json=json.dumps(cbom),
             api_metrics_json=json.dumps(api_metrics),
+            asset_details_json=json.dumps(scan_results.get("assetDetails", {})),
             overall_qvs=scan_results["riskScores"]["overall"],
         )
         db.add(scan_record)
-        
-        # 3. Update Schedule metadata
-        schedule.last_run_at = datetime.utcnow()
+
+        # 3. Update Schedule metadata — recorded regardless of whether the
+        # scan measured anything, so a schedule that keeps hitting an
+        # unreachable target doesn't re-fire early or duplicate-guard-trip
+        # against itself.
+        run_completed_at = datetime.utcnow()
+        schedule.last_run_at = run_completed_at
         if schedule.frequency == "once":
             # Without this, a restart re-registers a "once" schedule as a fresh
             # "next occurrence of HH:MM" job (register_schedule/start_worker only
@@ -106,11 +134,28 @@ async def run_automated_scan_and_email(schedule_id: int):
             schedule.is_active = False
         with_retry(lambda: db.commit())
 
-        # 4. Prepare scan_data for email
-        # We need to map some fields to what the mail service expects
+        # 4. Only generate/send a report if this fresh scan actually measured
+        # something. A scan where every pillar came back unreachable
+        # (pillarsAssessed == 0) is not "a successful scan completed" — sending
+        # an all-N/A report on a schedule would be indistinguishable from a
+        # real (but boring) "everything's fine" result, which is worse than
+        # not sending anything. The scan is still persisted above either way
+        # (so History shows the attempt), just not emailed.
+        if scan_results.get("pillarsAssessed", 0) == 0:
+            print(f"[WORKER] Scheduled scan for {web_url} completed but assessed 0 pillars "
+                  f"(target unreachable) — report NOT generated or sent.")
+            return
+
+        # Build the SAME canonical report the manual /report/export/{fmt}
+        # endpoint would build for this scan_id, straight from the row just
+        # committed above — never a separately-reconstructed or older scan.
+        canonical_report = report_service.build_canonical_report(db, scan_results["id"])
+
+        # 5. Prepare scan_data for email (legacy shape, kept for the fallback
+        # path in mail_service when canonical_report can't be built)
         scan_data = {
             "reportType": report_type.upper(),
-            "formats": ["pdf"],
+            "formats": ["pdf", "json", "xml", "csv"],
             "riskScores": scan_results["riskScores"],
             "cbom": cbom,
             "findings": scan_results["findings"], # The raw ones
@@ -122,11 +167,16 @@ async def run_automated_scan_and_email(schedule_id: int):
             "api_findings": scan_results["findings"].get("api", []),
             "vpn_findings": scan_results["findings"].get("vpn", []),
             "mobile_findings": scan_results["findings"].get("mobile", []),
+            "canonical_report": canonical_report,
         }
 
-        # 5. Send Email
+        # 6. Send Email — this scan (scan_results["id"]) was completed at
+        # run_completed_at, strictly after fire_time (when this scheduled
+        # trigger fired), so the report can never be an older scan than the
+        # schedule that produced it.
         success, message = send_scan_report(recipient, scan_data)
-        print(f"[WORKER] Scheduled scan complete for {web_url}. Email success: {success}, {message}")
+        print(f"[WORKER] Scheduled scan complete for {web_url} (scan_id={scan_results['id']}, "
+              f"completed_at={run_completed_at.isoformat()}). Email success: {success}, {message}")
 
     except Exception as e:
         print(f"[WORKER] Error in automated scan: {e}")
@@ -148,10 +198,28 @@ def register_schedule(schedule_obj: Schedule):
         return
 
     job_id = f"job_schedule_{schedule_obj.id}"
-    
-    # Remove existing job if it exists (for updates)
+
+    # Remove existing job if it exists (for updates) — combined with the
+    # deterministic job_id and `replace_existing=True` below, re-registering
+    # the same schedule (e.g. on every app restart, via start_worker()) can
+    # never result in two jobs for one schedule.
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
+
+    # max_instances=1: if a previous run of this exact job is somehow still
+    # executing when the next trigger fires, APScheduler refuses the overlap
+    # instead of running two scans/emails concurrently for the same schedule.
+    # coalesce=True + misfire_grace_time=3600: if the process was down when a
+    # trigger should have fired, run it ONCE (not once per missed occurrence)
+    # as long as we're back within an hour of the scheduled time — this is
+    # what "handle application restarts correctly" means for a cron-style
+    # schedule: a missed daily/weekly run still eventually happens, but never
+    # replays as a burst of catch-up runs, and (per run_automated_scan_and_email)
+    # always performs a fresh scan rather than emailing anything stale.
+    common_kwargs = dict(
+        args=[schedule_obj.id], id=job_id, replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
+    )
 
     if schedule_obj.frequency == "daily":
         scheduler.add_job(
@@ -159,8 +227,7 @@ def register_schedule(schedule_obj: Schedule):
             'cron',
             hour=hour,
             minute=minute,
-            args=[schedule_obj.id],
-            id=job_id
+            **common_kwargs,
         )
     elif schedule_obj.frequency == "weekly":
         # The UI offers no day-of-week picker, so "weekly" anchors to the
@@ -176,8 +243,7 @@ def register_schedule(schedule_obj: Schedule):
             day_of_week=datetime.now().weekday(),
             hour=hour,
             minute=minute,
-            args=[schedule_obj.id],
-            id=job_id
+            **common_kwargs,
         )
     elif schedule_obj.frequency == "once":
         # A 'cron' trigger with only hour/minute set recurs every day —
@@ -192,8 +258,7 @@ def register_schedule(schedule_obj: Schedule):
             run_automated_scan_and_email,
             'date',
             run_date=run_at,
-            args=[schedule_obj.id],
-            id=job_id
+            **common_kwargs,
         )
 
 def start_worker():

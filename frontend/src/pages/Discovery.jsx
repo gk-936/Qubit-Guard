@@ -3,6 +3,13 @@ import api from '../api';
 import { useNavigate } from 'react-router-dom';
 import { Network, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
+import { Doughnut } from 'react-chartjs-2';
+
+ChartJS.register(ArcElement, Tooltip, Legend);
+
+const TAG_COLOR = { Legacy: '#C0272D', Standard: '#D47800', ElitePQC: '#1A8A1A', 'Not Assessed': '#888' };
+const tagColor = (tag) => TAG_COLOR[tag] || '#888';
 
 const COMMON_SUBDOMAINS = [
   "www", "api", "vpn", "gate", "gw", "secure", "portal", "test", "dev", 
@@ -14,6 +21,7 @@ const Discovery = () => {
   const [target, setTarget] = useState(activeScanMetadata?.target || 'pnb.bank.in');
   const [discoveryInfo, setDiscoveryInfo] = useState(discoveryResults);
   const [loading, setLoading] = useState(false);
+  const [expandedHost, setExpandedHost] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -123,9 +131,8 @@ const Discovery = () => {
                 const distance = 160;
                 const x = 400 + distance * Math.cos(angle);
                 const y = 225 + distance * Math.sin(angle);
-                const isPqc = asset.pqc_ready;
-                const color = isPqc ? '#1A8A1A' : '#C0272D';
-                const bgColor = isPqc ? '#F0FFF0' : '#FFF3F3';
+                const color = tagColor(asset.tag);
+                const bgColor = asset.tag === 'ElitePQC' ? '#F0FFF0' : asset.tag === 'Standard' ? '#FFF8EE' : '#FFF3F3';
                 
                 return (
                   <g key={i} style={{ cursor: 'pointer' }} opacity="0.9" onClick={() => handleAutomatedScan(asset.host)}>
@@ -144,7 +151,7 @@ const Discovery = () => {
                     </text>
                     
                     {/* Status Indicator */}
-                    <circle cx={x + 18} cy={y - 18} r="5" fill={isPqc ? '#1A8A1A' : '#C0272D'} />
+                    <circle cx={x + 18} cy={y - 18} r="5" fill={color} />
                   </g>
                 );
               })}
@@ -190,9 +197,9 @@ const Discovery = () => {
                 <div className="stat-value">{discoveryInfo.total_found}</div>
                 <div className="stat-label">Assets Found</div>
               </div>
-              <div className={`stat-card ${discoveryInfo.assets.some(a => !a.pqc_ready) ? 'danger' : 'safe'}`}>
-                <div className="stat-value">{discoveryInfo.assets.filter(a => !a.pqc_ready).length}</div>
-                <div className="stat-label">Vulnerable Assets</div>
+              <div className={`stat-card ${discoveryInfo.assets.some(a => a.tag === 'Legacy') ? 'danger' : 'safe'}`}>
+                <div className="stat-value">{discoveryInfo.assets.filter(a => a.tag === 'Legacy').length}</div>
+                <div className="stat-label">Legacy Assets</div>
               </div>
               <div className="stat-card info">
                 <div className="stat-value">{discoveryInfo.assets.reduce((acc, current) => acc + current.pillars.length, 0)}</div>
@@ -204,23 +211,140 @@ const Discovery = () => {
               </div>
             </div>
 
+            {/* ── Bank-wide overall score, computed ONLY from the individual asset
+                scores above — no separate generic website score. ── */}
+            {discoveryInfo.overall_score && (
+              <div className="card" style={{ marginTop: '20px', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#7A5A30', letterSpacing: '2px' }}>BANK-WIDE OVERALL SCORE</div>
+                  <div style={{ fontFamily: 'var(--disp)', fontSize: '48px', fontWeight: 700, color: tagColor(discoveryInfo.overall_score.tag) }}>
+                    {discoveryInfo.overall_score.rating ?? '—'}<span style={{ fontSize: '20px' }}>/1000</span>
+                  </div>
+                  <span style={{
+                    fontSize: '11px', fontWeight: 700, letterSpacing: '1px', padding: '3px 12px', borderRadius: '4px',
+                    background: `${tagColor(discoveryInfo.overall_score.tag)}22`, color: tagColor(discoveryInfo.overall_score.tag),
+                  }}>{discoveryInfo.overall_score.tag}</span>
+                  <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
+                    {discoveryInfo.overall_score.assets_scored} / {discoveryInfo.overall_score.assets_total} assets scored
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A5A30', marginBottom: '6px' }}>How this score was calculated</div>
+                  <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '11px', lineHeight: 1.7, color: '#444' }}>
+                    {discoveryInfo.overall_score.factors.map((f, i) => <li key={i}>{f}</li>)}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* ── 6-algorithm PQC migration distribution — tallied from the real
+                per-asset recommendations below, not invented categories. ── */}
+            {discoveryInfo.pqc_distribution && (
+              <div className="card" style={{ marginTop: '20px' }}>
+                <div className="card-title" style={{ fontSize: '13px' }}>PQC Migration Distribution — 6 Supported Algorithms</div>
+                {Object.values(discoveryInfo.pqc_distribution).every(v => v === 0) ? (
+                  <div style={{ textAlign: 'center', padding: '20px', color: '#888', fontSize: '12px' }}>
+                    No asset currently needs a PQC migration recommendation (nothing scored below ElitePQC yet).
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '20px', alignItems: 'center' }}>
+                    <div style={{ height: '220px' }}>
+                      <Doughnut
+                        data={{
+                          labels: Object.keys(discoveryInfo.pqc_distribution),
+                          datasets: [{
+                            data: Object.values(discoveryInfo.pqc_distribution),
+                            backgroundColor: ['#1A6ACC', '#1ACC5A', '#D47800', '#8A5AE0', '#CC8A1A', '#EC4899'],
+                            borderWidth: 0,
+                          }],
+                        }}
+                        options={{ maintainAspectRatio: false, plugins: { legend: { display: false } } }}
+                      />
+                    </div>
+                    <div>
+                      {Object.entries(discoveryInfo.pqc_distribution).map(([algo, count], i) => (
+                        <div key={algo} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '4px 8px', marginBottom: '3px', background: 'rgba(212,160,23,0.05)', borderRadius: '4px' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: ['#1A6ACC', '#1ACC5A', '#D47800', '#8A5AE0', '#CC8A1A', '#EC4899'][i % 6] }}></span>
+                            {algo}
+                          </span>
+                          <b>{count} asset{count === 1 ? '' : 's'}</b>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <table className="data-table" style={{ marginTop: '20px' }}>
               <thead>
                 <tr>
                   <th>Host / Subdomain</th>
                   <th>Pillar Classification</th>
-                  <th>Status</th>
+                  <th>Score</th>
+                  <th>Tag</th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {discoveryInfo.assets.map((asset, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600, fontFamily: 'var(--mono)', fontSize: '12px' }}>{asset.host}</td>
-                    <td>{asset.pillars.join(', ')}</td>
-                    <td><span className={`badge ${asset.pqc_ready ? 'badge-safe' : 'badge-danger'}`}>{asset.pqc_ready ? 'Ready' : 'Vulnerable'}</span></td>
-                    <td><button className="btn btn-gold btn-sm" onClick={() => handleAutomatedScan(asset.host)}>Scan</button></td>
-                  </tr>
+                  <React.Fragment key={i}>
+                    <tr>
+                      <td style={{ fontWeight: 600, fontFamily: 'var(--mono)', fontSize: '12px' }}>{asset.host}</td>
+                      <td>{asset.pillars.join(', ')}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}>
+                        {asset.qvs_score === null || asset.qvs_score === undefined ? 'N/A' : `${asset.qvs_score}/100`}
+                      </td>
+                      <td>
+                        <span className="badge" style={{ background: `${tagColor(asset.tag)}22`, color: tagColor(asset.tag), fontWeight: 700 }}>
+                          {asset.tag}
+                        </span>
+                      </td>
+                      <td style={{ display: 'flex', gap: '6px' }}>
+                        <button className="btn btn-gold btn-sm" onClick={() => handleAutomatedScan(asset.host)}>Scan</button>
+                        {(asset.recommendations?.length > 0 || asset.score_factors?.length > 0) && (
+                          <button className="btn btn-outline btn-sm" onClick={() => setExpandedHost(expandedHost === asset.host ? null : asset.host)}>
+                            {expandedHost === asset.host ? 'Hide' : 'Details'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {expandedHost === asset.host && (
+                      <tr>
+                        <td colSpan="5" style={{ background: '#FFFBF5', padding: '14px 18px' }}>
+                          {asset.score_factors?.length > 0 && (
+                            <div style={{ marginBottom: '10px' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#7A5A30', letterSpacing: '1px', marginBottom: '4px' }}>SCORE FACTORS</div>
+                              <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '11px', color: '#444', lineHeight: 1.6 }}>
+                                {asset.score_factors.map((f, fi) => <li key={fi}>{f}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                          {asset.recommendations?.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#7A5A30', letterSpacing: '1px', marginBottom: '4px' }}>RECOMMENDATIONS</div>
+                              {asset.recommendations.map((r, ri) => (
+                                <div key={ri} style={{ padding: '8px 10px', marginBottom: '6px', background: '#fff', borderRadius: '6px', borderLeft: `3px solid ${r.priority === 'critical' ? '#C0272D' : r.priority === 'high' ? '#D47800' : r.priority === 'medium' ? '#1A6BAA' : '#888'}` }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                    <b style={{ fontSize: '11px' }}>{r.issue}</b>
+                                    <span style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', color: r.priority === 'critical' ? '#C0272D' : r.priority === 'high' ? '#D47800' : r.priority === 'medium' ? '#1A6BAA' : '#888' }}>{r.priority}</span>
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#444', margin: '4px 0' }}>{r.change}</div>
+                                  {r.pqc_migration && (
+                                    <div style={{ fontSize: '10px', color: '#1A8A1A' }}>
+                                      → Migrate to <b>{r.pqc_migration.algorithm_id}</b> ({r.pqc_migration.recommended_parameter}, {r.pqc_migration.fips_standard})
+                                    </div>
+                                  )}
+                                  <div style={{ fontSize: '9px', color: '#888', marginTop: '4px', fontStyle: 'italic' }}>{r.evidence}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

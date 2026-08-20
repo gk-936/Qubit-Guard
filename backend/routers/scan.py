@@ -51,6 +51,7 @@ def get_scan_detail(scan_id: str, db: Session = Depends(get_db)):
             "riskScores": json.loads(scan.risk_scores_json or '{}'),
             "cbom": json.loads(scan.cbom_json or '{}'),
             "apiMetrics": json.loads(scan.api_metrics_json or '{}'),
+            "assetDetails": json.loads(scan.asset_details_json or '{}'),
             "webUrl": scan.web_url,
             "vpnUrl": scan.vpn_url,
             "apiUrl": scan.api_url,
@@ -137,6 +138,7 @@ def triad_scan(body: TriadScanRequest, db: Session = Depends(get_db)):
         risk_scores_json=json.dumps(scan_results["riskScores"]),
         cbom_json=json.dumps(cbom),
         api_metrics_json=json.dumps(api_metrics),
+        asset_details_json=json.dumps(scan_results.get("assetDetails", {})),
         overall_qvs=scan_results["riskScores"]["overall"],
     )
     db.add(scan_record)

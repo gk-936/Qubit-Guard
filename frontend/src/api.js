@@ -96,6 +96,12 @@ export const exportCbom = (fmt) => api.get(`/data/cbom/export/${fmt}`, { respons
 export const downloadReportPdf = (type) =>
   api.get('/data/report/download-pdf', { params: { type }, responseType: 'blob' });
 
+// Canonical multi-format export — PDF/XML/JSON/CSV are all rendered from the
+// exact same scan data (services/report_service.py), so whichever format is
+// downloaded here is guaranteed consistent with the others and with the UI.
+export const exportCanonicalReport = (fmt, scanId) =>
+  api.get(`/data/report/export/${fmt}`, { params: scanId ? { scan_id: scanId } : {}, responseType: 'blob' });
+
 export const saveBlob = (blob, filename) => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ApiMetrics from '../components/ApiMetrics';
+import AssetDetailsPanel from '../components/AssetDetailsPanel';
 import { runTriadScan as apiRunScan, chatWithExpert } from '../api';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
@@ -19,6 +20,7 @@ const TriadScanner = () => {
   const [findings, setFindings] = useState(activeData?.findings || { web: [], vpn: [], api: [], firmware: [], archival: [] });
   const [riskScores, setRiskScores] = useState(activeData?.riskScores || { web: null, vpn: null, api: null, firmware: null, archival: null, overall: null });
   const [selectorLog, setSelectorLog] = useState(activeData?.selectorLog || null);
+  const [assetDetails, setAssetDetails] = useState(activeData?.assetDetails || {});
   const [apiMetrics, setApiMetrics] = useState(activeData?.apiMetrics || null);
   const [cbom, setCbom] = useState(activeData?.cbom || null);
   const [remediation, setRemediation] = useState(activeData?.remediation || []);
@@ -34,6 +36,7 @@ const TriadScanner = () => {
       setCbom(activeData.cbom);
       setRemediation(activeData.remediation || []);
       setSelectorLog(activeData.selectorLog || null);
+      setAssetDetails(activeData.assetDetails || {});
       setWebTarget(activeData.webUrl);
       setVpnTarget(activeData.vpnUrl);
       setApiTarget(activeData.apiUrl);
@@ -96,6 +99,7 @@ const TriadScanner = () => {
         setCbom(result.cbom);
         setRemediation(result.remediation || []);
         setSelectorLog(result.selectorLog || null);
+        setAssetDetails(result.assetDetails || {});
         setShowResults(true);
 
         // Update Global Context
@@ -259,6 +263,7 @@ const TriadScanner = () => {
                         </div>
                       </div>
                     ))}
+                    <AssetDetailsPanel details={assetDetails?.[pillar]} />
                     {pillar === 'web' && findings[pillar].length > 0 && (
                       <div className="owasp-innovation-cta" style={{ marginTop: '16px' }}>
                         <button 

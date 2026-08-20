@@ -894,17 +894,41 @@ Research and Development: Qubit-Guard v2.0
     if not bank_id: bank_id = "QVS"
     
     formats = scan_data.get("formats", [])
+    canonical_report = scan_data.get("canonical_report")
+
     for fmt in formats:
         try:
             part = MIMEBase("application", "octet-stream")
-            
-            if fmt == "json":
-                # Export raw scan data as JSON
+
+            # When a canonical report is available (built once by the caller
+            # from the just-completed scan via services/report_service.py),
+            # every attached format is rendered from that SAME dict — the
+            # exact data the download/export endpoints and the UI show.
+            # "excel" is kept as an accepted format name for backward
+            # compatibility with existing schedule configs; it now renders
+            # the real per-asset CSV instead of a CBOM-only one.
+            if canonical_report is not None and fmt in ("json", "xml", "csv", "excel", "pdf"):
+                from services import report_service
+                if fmt == "pdf":
+                    payload = report_service.to_pdf_bytes(canonical_report, bank_name)
+                    filename = f"{bank_id}_QVS_Audit_Report_{report_type.title()}.pdf"
+                elif fmt in ("csv", "excel"):
+                    payload = report_service.to_csv_bytes(canonical_report)
+                    filename = f"{bank_id}_qvs_audit_{report_type.lower()}.csv"
+                elif fmt == "xml":
+                    payload = report_service.to_xml_bytes(canonical_report)
+                    filename = f"{bank_id}_qvs_audit_{report_type.lower()}.xml"
+                else:
+                    payload = report_service.to_json_bytes(canonical_report)
+                    filename = f"{bank_id}_qvs_audit_{report_type.lower()}.json"
+
+            elif fmt == "json":
+                # Legacy path (no canonical_report supplied) — export raw scan_data.
                 payload = json.dumps(scan_data, indent=2).encode("utf-8")
                 filename = f"{bank_id}_qvs_audit_{report_type.lower()}.json"
-            
+
             elif fmt == "excel":
-                # Excel spreadsheet with CBOM components
+                # Legacy path: CBOM-only CSV.
                 cbom_items = scan_data.get("cbom", {}).get("components", [])
                 excel_lines = ["Component,Version,Algorithm,Quantum-Safe,Risk,Action"]
                 for item in cbom_items[:50]:  # Limit to 50 for readability
@@ -917,21 +941,20 @@ Research and Development: Qubit-Guard v2.0
                     excel_lines.append(f'"{comp}","{ver}","{algo}","{safe}","{risk}","{action}"')
                 payload = "\n".join(excel_lines).encode("utf-8")
                 filename = f"{bank_id}_cbom_inventory_{report_type.lower()}.csv"
-            
-            else:  # pdf
-                # Generate professional PDF using the new algorithm
+
+            else:  # pdf, legacy path
                 payload = generate_professional_pdf(report_type, scan_data, db)
                 filename = f"{bank_id}_QVS_Audit_Report_{report_type.title()}.pdf"
-            
+
             part.set_payload(payload)
             encoders.encode_base64(part)
             part.add_header("Content-Disposition", f"attachment; filename={filename}")
             msg.attach(part)
             print(f"[MAIL] Attached: {filename}")
-            
+
         except Exception as ae:
             print(f"[MAIL] Failed to attach {fmt}: {ae}")
-    
+
     return msg
 
 

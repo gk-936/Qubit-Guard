@@ -3,6 +3,7 @@ import { searchMobileApps, scanMobileApp as apiScanApp } from '../api';
 import { useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
+import AssetDetailsPanel from '../components/AssetDetailsPanel';
 
 const MobileScanner = () => {
   const { activeScanId, activeScanMetadata } = useScan();
@@ -189,6 +190,7 @@ const MobileScanner = () => {
                     </div>
                   </div>
                 ))}
+                <AssetDetailsPanel details={scanResult.assetDetails} light />
               </div>
               <div style={{ textAlign: 'center', borderLeft: '1px solid #eee', paddingLeft: '20px' }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#888', letterSpacing: '2px' }}>MOBILE PQC SCORE</div>

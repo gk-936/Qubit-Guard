@@ -18,6 +18,7 @@ import json
 import base64
 import time
 import uuid
+import ipaddress
 import logging
 from datetime import datetime
 from urllib.parse import urlparse
@@ -30,11 +31,353 @@ from services.ml_selector import select_algorithm as ml_select
 log = logging.getLogger(__name__)
 
 try:
+    import cryptography
     from cryptography import x509
     from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
     _HAS_CRYPTOGRAPHY = True
 except ImportError:  # pragma: no cover - cryptography is a declared dependency
     _HAS_CRYPTOGRAPHY = False
+
+try:
+    import dns.resolver
+    import dns.exception
+    import dns.version
+    _HAS_DNSPYTHON = True
+except ImportError:  # pragma: no cover - dnspython is a declared dependency
+    _HAS_DNSPYTHON = False
+
+# NA = the value could not be extracted or validated. Never guessed/defaulted.
+NA = "N/A"
+
+# TLS protocol version -> its IANA-registered protocol identifier (the two
+# bytes sent on the wire in ClientHello/ServerHello.legacy_version). This is
+# the closest thing TLS has to an "OID" for the negotiated protocol.
+TLS_VERSION_PROTOCOL_ID = {
+    "TLSv1.3": "0x0304",
+    "TLSv1.2": "0x0303",
+    "TLSv1.1": "0x0302",
+    "TLSv1":   "0x0301",
+    "TLSv1.0": "0x0301",
+    "SSLv3":   "0x0300",
+}
+
+
+def _na(value):
+    """Validate a value before display: empty/None/whitespace-only -> N/A.
+
+    Never fabricates a value — only passes through what was actually
+    extracted, or reports N/A when nothing was extracted.
+    """
+    if value is None:
+        return NA
+    if isinstance(value, str) and not value.strip():
+        return NA
+    if isinstance(value, (list, tuple, dict)) and len(value) == 0:
+        return NA
+    return value
+
+
+def _valid_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _library_versions() -> dict:
+    """Report the actual crypto/TLS/DNS library versions used to produce this
+    scan's results — never a hardcoded/assumed version string.
+    """
+    versions = {
+        "python_ssl_module": NA,
+        "openssl": NA,
+        "cryptography": NA,
+        "dnspython": NA,
+    }
+    try:
+        versions["python_ssl_module"] = ssl.OPENSSL_VERSION
+        versions["openssl"] = ssl.OPENSSL_VERSION
+    except Exception:
+        pass
+    if _HAS_CRYPTOGRAPHY:
+        try:
+            versions["cryptography"] = cryptography.__version__
+        except Exception:
+            pass
+    if _HAS_DNSPYTHON:
+        try:
+            versions["dnspython"] = dns.version.version
+        except Exception:
+            pass
+    return versions
+
+
+def _resolve_dns(host: str) -> dict:
+    """Resolve a hostname's real DNS records. Never guesses — an unresolved
+    record type is reported as N/A / empty, not fabricated.
+    """
+    result = {"ipv4": [], "ipv6": [], "error": None}
+
+    if _valid_ip(host):
+        # host is already a literal IP — classify it directly, no lookup needed.
+        try:
+            if ipaddress.ip_address(host).version == 4:
+                result["ipv4"] = [host]
+            else:
+                result["ipv6"] = [host]
+        except ValueError:
+            pass
+        return result
+
+    if _HAS_DNSPYTHON:
+        for rtype, bucket in (("A", "ipv4"), ("AAAA", "ipv6")):
+            try:
+                answers = dns.resolver.resolve(host, rtype, lifetime=5)
+                result[bucket] = [str(r).strip() for r in answers if _valid_ip(str(r).strip())]
+            except dns.exception.DNSException as e:
+                log.debug("DNS %s lookup failed for %s: %s", rtype, host, e)
+    else:
+        # Fallback when dnspython is unavailable: socket.getaddrinfo still
+        # gives real resolver results, just without record-type granularity.
+        try:
+            infos = socket.getaddrinfo(host, None)
+            for family, _, _, _, sockaddr in infos:
+                addr = sockaddr[0]
+                if not _valid_ip(addr):
+                    continue
+                if family == socket.AF_INET and addr not in result["ipv4"]:
+                    result["ipv4"].append(addr)
+                elif family == socket.AF_INET6 and addr not in result["ipv6"]:
+                    result["ipv6"].append(addr)
+        except OSError as e:
+            result["error"] = str(e)
+
+    if not result["ipv4"] and not result["ipv6"] and result["error"] is None:
+        result["error"] = "No A/AAAA records resolved"
+    return result
+
+
+def _extract_cert_full(der_cert: bytes) -> dict:
+    """Parse every certificate field this feature set needs directly from the
+    DER bytes presented in the handshake — the sole source of truth. Any
+    field that cannot be parsed is reported as N/A, never guessed.
+    """
+    fields = {
+        "serial_number": NA,
+        "not_before": NA,
+        "not_after": NA,
+        "issuer_cn": NA,
+        "issuer_org": NA,
+        "issuer_country": NA,
+        "issuer_full": NA,
+        "subject_cn": NA,
+        "subject_full": NA,
+        "san_dns": [],
+        "san_ip": [],
+        "signature_hash_algorithm": NA,
+        "signature_algorithm_oid": NA,
+        "signature_algorithm_name": NA,
+        "public_key_algorithm_oid": NA,
+    }
+    if not (_HAS_CRYPTOGRAPHY and der_cert):
+        return fields
+    try:
+        cert = x509.load_der_x509_certificate(der_cert)
+    except Exception as e:
+        log.debug("Certificate parse failed: %s", e)
+        return fields
+
+    try:
+        fields["serial_number"] = format(cert.serial_number, "X")
+    except Exception:
+        pass
+    try:
+        fields["not_before"] = cert.not_valid_before_utc.isoformat()
+        fields["not_after"] = cert.not_valid_after_utc.isoformat()
+    except AttributeError:
+        # cryptography < 42 exposes naive not_valid_before/not_valid_after only.
+        try:
+            fields["not_before"] = cert.not_valid_before.isoformat()
+            fields["not_after"] = cert.not_valid_after.isoformat()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        issuer = cert.issuer
+        fields["issuer_full"] = issuer.rfc4514_string()
+        cn = issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+        fields["issuer_cn"] = cn[0].value if cn else NA
+        org = issuer.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)
+        fields["issuer_org"] = org[0].value if org else NA
+        country = issuer.get_attributes_for_oid(x509.NameOID.COUNTRY_NAME)
+        fields["issuer_country"] = country[0].value if country else NA
+    except Exception as e:
+        log.debug("Issuer parse failed: %s", e)
+    try:
+        subject = cert.subject
+        fields["subject_full"] = subject.rfc4514_string()
+        cn = subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+        fields["subject_cn"] = cn[0].value if cn else NA
+    except Exception as e:
+        log.debug("Subject parse failed: %s", e)
+    try:
+        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        fields["san_dns"] = san_ext.value.get_values_for_type(x509.DNSName)
+        fields["san_ip"] = [str(ip) for ip in san_ext.value.get_values_for_type(x509.IPAddress)]
+    except x509.ExtensionNotFound:
+        pass
+    except Exception as e:
+        log.debug("SAN parse failed: %s", e)
+    try:
+        fields["signature_algorithm_oid"] = cert.signature_algorithm_oid.dotted_string
+        fields["signature_algorithm_name"] = cert.signature_algorithm_oid._name
+    except Exception as e:
+        log.debug("Signature OID parse failed: %s", e)
+    try:
+        h = cert.signature_hash_algorithm
+        fields["signature_hash_algorithm"] = h.name.upper() if h else NA
+    except Exception as e:
+        log.debug("Signature hash parse failed: %s", e)
+    try:
+        pub = cert.public_key()
+        fields["public_key_algorithm_oid"] = cert.signature_algorithm_oid.dotted_string if pub else NA
+    except Exception:
+        pass
+
+    for k, v in fields.items():
+        fields[k] = _na(v)
+    return fields
+
+
+# Cipher-suite name -> (encryption algorithm, cipher hash/PRF algorithm).
+# Matched by substring against both TLS 1.3 style (TLS_AES_256_GCM_SHA384)
+# and TLS 1.2 OpenSSL style (ECDHE-RSA-AES256-GCM-SHA384) suite names.
+_ENC_PATTERNS = [
+    ("CHACHA20-POLY1305", "CHACHA20-POLY1305"), ("CHACHA20", "CHACHA20-POLY1305"),
+    ("AES-256-GCM", "AES-256-GCM"), ("AES256-GCM", "AES-256-GCM"), ("AES_256_GCM", "AES-256-GCM"),
+    ("AES-128-GCM", "AES-128-GCM"), ("AES128-GCM", "AES-128-GCM"), ("AES_128_GCM", "AES-128-GCM"),
+    ("AES256-CBC", "AES-256-CBC"), ("AES128-CBC", "AES-128-CBC"),
+    ("AES256", "AES-256-CBC"), ("AES128", "AES-128-CBC"),
+    ("3DES", "3DES-CBC"), ("DES-CBC3", "3DES-CBC"),
+    ("RC4", "RC4"),
+]
+_HASH_PATTERNS = [
+    ("SHA384", "SHA-384"), ("SHA256", "SHA-256"), ("SHA512", "SHA-512"),
+    ("SHA1", "SHA-1"), ("SHA", "SHA-1"), ("MD5", "MD5"),
+]
+
+
+def _parse_cipher_suite(cipher_name: str) -> dict:
+    """Derive the symmetric encryption/cipher algorithm and PRF/MAC hash
+    algorithm actually negotiated, parsed from the real cipher-suite name
+    returned by the handshake (ssl.SSLSocket.cipher()). Never guessed —
+    an unrecognised suite name reports N/A for the field that can't be
+    matched.
+    """
+    name = (cipher_name or "").upper()
+    result = {"encryption_algorithm": NA, "cipher_hash_algorithm": NA}
+    if not name or name == "UNKNOWN":
+        return result
+    for pattern, label in _ENC_PATTERNS:
+        if pattern in name:
+            result["encryption_algorithm"] = label
+            break
+    for pattern, label in _HASH_PATTERNS:
+        if pattern in name:
+            result["cipher_hash_algorithm"] = label
+            break
+    return result
+
+
+def _build_asset_details(tls_info: dict, qvs=None) -> dict:
+    """Assemble the full per-asset detail block (classification, algorithms,
+    OIDs, certificate, DNS, library versions) from a completed `_get_tls_info`
+    probe. Shared by every pillar so the same real measurement is shown
+    consistently everywhere it's reused across pillars.
+    """
+    if not tls_info.get("reachable"):
+        return {
+            "classification": _classify_asset(None),
+            "tag": _tag_from_qvs(None),
+            "host": tls_info.get("host"), "port": tls_info.get("port"),
+            "tls_version": NA, "tls_protocol_id": NA,
+            "hash_algorithm": NA, "encryption_algorithm": NA,
+            "cipher_hash_algorithm": NA, "authentication_algorithm": NA,
+            "key_exchange_algorithm": NA, "key_exchange_group": NA,
+            "key_length_bits": NA, "signature_algorithm_oid": NA,
+            "signature_algorithm_name": NA, "certificate": None,
+            "dns": tls_info.get("dns", {"ipv4": [], "ipv6": [], "error": None}),
+            "libraries": tls_info.get("libraries", _library_versions()),
+        }
+    cert_full = tls_info["cert"]
+    auth_bits = tls_info.get("auth_bits")
+    return {
+        "classification": _classify_asset(qvs),
+        "tag": _tag_from_qvs(qvs),
+        "host": tls_info.get("host"), "port": tls_info.get("port"),
+        "tls_version": _na(tls_info.get("tls_version")),
+        "tls_protocol_id": tls_info.get("tls_protocol_id", NA),
+        "hash_algorithm": cert_full["signature_hash_algorithm"],
+        "encryption_algorithm": tls_info.get("encryption_algorithm", NA),
+        "cipher_hash_algorithm": tls_info.get("cipher_hash_algorithm", NA),
+        "authentication_algorithm": _na(tls_info.get("auth_algo")),
+        "key_exchange_algorithm": _na(tls_info.get("key_exchange")),
+        "key_exchange_group": _na(tls_info.get("key_exchange_group")),
+        "key_length_bits": auth_bits if auth_bits else NA,
+        "signature_algorithm_oid": cert_full["signature_algorithm_oid"],
+        "signature_algorithm_name": cert_full["signature_algorithm_name"],
+        "certificate": {
+            "serial_number": cert_full["serial_number"],
+            "issuer": cert_full["issuer_full"],
+            "issuer_cn": cert_full["issuer_cn"],
+            "issuer_org": cert_full["issuer_org"],
+            "issuer_country": cert_full["issuer_country"],
+            "subject": cert_full["subject_full"],
+            "subject_cn": cert_full["subject_cn"],
+            "not_before": cert_full["not_before"],
+            "not_after": cert_full["not_after"],
+            "san_dns": _na(cert_full["san_dns"]),
+            "san_ip": _na(cert_full["san_ip"]),
+        },
+        "dns": tls_info["dns"],
+        "libraries": tls_info["libraries"],
+    }
+
+
+def _tag_from_qvs(qvs) -> str:
+    """3-tier asset tag used consistently across every scanned asset (Triad
+    pillars, mobile, and discovered subdomains) and the bank-wide overall
+    score — the single source of truth for what counts as Legacy/Standard/
+    ElitePQC, so every part of the UI that shows a tag agrees with every
+    other part, all derived from the same QVS scale used everywhere else in
+    this file. A pillar/asset that was never assessed gets "Not Assessed",
+    never a default tag.
+    """
+    if qvs is None:
+        return "Not Assessed"
+    if qvs >= 50:
+        return "Legacy"
+    if qvs >= 20:
+        return "Standard"
+    return "ElitePQC"
+
+
+def _classify_asset(qvs) -> str:
+    """Scan classification for an asset, derived only from an actually
+    computed QVS score. A pillar that was never assessed is classified as
+    such, not silently treated as safe.
+    """
+    if qvs is None:
+        return "NOT ASSESSED"
+    if qvs >= 80:
+        return "QUANTUM-VULNERABLE (CRITICAL)"
+    if qvs >= 50:
+        return "QUANTUM-VULNERABLE (HIGH)"
+    if qvs >= 20:
+        return "HYBRID PQC (MODERATE)"
+    return "QUANTUM-SAFE (PQC)"
 
 
 # ── QVS Scoring (FR-06) ──────────────────────────────────────────────────────
@@ -215,10 +558,15 @@ def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = 
 # ── Shared TLS Probe ─────────────────────────────────────────────────────────
 
 def _get_tls_info(url: str) -> dict:
-    """Perform a real TLS handshake and return cert/cipher metadata."""
+    """Perform a real TLS handshake and return the full set of cert/cipher/DNS/
+    library metadata this feature set needs. Every field is either read
+    directly off the handshake/certificate/resolver, or reported as N/A.
+    """
     parsed = urlparse(url if url.startswith("http") else f"https://{url}")
     host = parsed.hostname or url
     port = parsed.port or 443
+    dns_info = _resolve_dns(host)
+    libraries = _library_versions()
     try:
         context = ssl.create_default_context()
         started = time.monotonic()
@@ -235,6 +583,8 @@ def _get_tls_info(url: str) -> dict:
                 cipher_name = cipher[0] if cipher else "Unknown"
                 cipher_bits = cipher[2] if cipher else 0
                 crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
+                cert_full = _extract_cert_full(der_cert)
+                cipher_parsed = _parse_cipher_suite(cipher_name)
                 return {
                     "reachable": True, "host": host, "port": port,
                     "cn": subject.get("commonName", "N/A"),
@@ -242,16 +592,23 @@ def _get_tls_info(url: str) -> dict:
                     "sans": sans,
                     "cipher_name": cipher_name, "cipher_bits": cipher_bits,
                     "tls_version": tls_version,
+                    "tls_protocol_id": _na(TLS_VERSION_PROTOCOL_ID.get(tls_version)),
                     "key_exchange": crypto["key_exchange"],
                     "key_exchange_group": crypto["key_exchange_group"],
                     "auth_algo": crypto["auth_algo"],
                     "auth_bits": crypto["auth_bits"],
                     "auth_source": crypto["auth_source"],
+                    "encryption_algorithm": cipher_parsed["encryption_algorithm"],
+                    "cipher_hash_algorithm": cipher_parsed["cipher_hash_algorithm"],
                     "handshake_ms": handshake_ms,
                     "not_after": cert.get("notAfter", "N/A"),
+                    "cert": cert_full,
+                    "dns": dns_info,
+                    "libraries": libraries,
                 }
     except Exception as e:
-        return {"reachable": False, "host": host, "error": str(e)}
+        return {"reachable": False, "host": host, "port": port, "error": str(e),
+                "dns": dns_info, "libraries": libraries}
 
 
 # ── Pillar A: TLS Certificate Engine ─────────────────────────────────────────
@@ -260,38 +617,41 @@ def _scan_web_tls(web_url: str) -> dict:
     """Perform real outbound TLS handshake probing on a web server."""
     findings = []
     pillar_qvs_scores = []
+    asset_details = None
+
+    tls_info = _get_tls_info(web_url)
+    host = tls_info["host"]
+
+    if not tls_info["reachable"]:
+        # The host could not be probed. Report that and nothing else — no cryptographic
+        # claim is made about a host we never reached. DNS/library info is still real
+        # and still shown, since it doesn't depend on the handshake succeeding.
+        findings.append({
+            "severity": "info",
+            "issue": "TLS Probe Failed — Host Not Assessed",
+            "detail": f"Could not complete a TLS handshake with {web_url}: {tls_info.get('error')}. No cryptographic findings are reported for this host because none were observed.",
+            "recommendation": "Verify endpoint availability, DNS resolution and firewall rules, then re-run the scan.",
+            "evidence": "measured",
+            "inferred_from": None,
+        })
+        asset_details = _build_asset_details(tls_info)
+        return {"findings": findings, "qvs": None, "scanned": False,
+                "error": tls_info.get("error"), "evidence_summary": _evidence_summary(findings),
+                "asset_details": asset_details}
 
     try:
-        parsed = urlparse(web_url if web_url.startswith("http") else f"https://{web_url}")
-        host = parsed.hostname or web_url
-        port = parsed.port or 443
+        cn = tls_info["cn"]
+        issuer_org = tls_info["issuer_org"]
+        not_after = tls_info["not_after"]
+        cipher_name = tls_info["cipher_name"]
+        cipher_bits = tls_info["cipher_bits"]
+        tls_version = tls_info["tls_version"]
+        handshake_ms = tls_info["handshake_ms"]
+        cert_full = tls_info["cert"]
 
-        context = ssl.create_default_context()
-        started = time.monotonic()
-        with socket.create_connection((host, port), timeout=8) as sock:
-            with context.wrap_socket(sock, server_hostname=host) as tls_sock:
-                handshake_ms = round((time.monotonic() - started) * 1000)
-                cert = tls_sock.getpeercert()
-                der_cert = tls_sock.getpeercert(binary_form=True)
-                cipher = tls_sock.cipher()  # (name, version, bits)
-                tls_version = tls_sock.version()
-
-        # Extract certificate details
-        subject = dict(x[0] for x in cert.get("subject", []))
-        issuer = dict(x[0] for x in cert.get("issuer", []))
-        cn = subject.get("commonName", "N/A")
-        issuer_org = issuer.get("organizationName", "N/A")
-        not_after = cert.get("notAfter", "N/A")
-
-        cipher_name = cipher[0] if cipher else "Unknown"
-        cipher_bits = cipher[2] if cipher else 0
-
-        # Key exchange from the protocol, authentication from the certificate —
-        # never inferred from the TLS 1.3 cipher suite name, which encodes neither.
-        crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
-        key_exchange = crypto["key_exchange"]
-        auth_algo = crypto["auth_algo"]
-        auth_bits = crypto["auth_bits"]
+        key_exchange = tls_info["key_exchange"]
+        auth_algo = tls_info["auth_algo"]
+        auth_bits = tls_info["auth_bits"]
         auth_label = f"{auth_algo}-{auth_bits}" if auth_bits else auth_algo
 
         # Pillar QVS is driven by the weaker of the two primitives in use.
@@ -300,14 +660,16 @@ def _scan_web_tls(web_url: str) -> dict:
         qvs = max(kx_qvs, auth_qvs)
         pillar_qvs_scores.append(qvs)
 
+        asset_details = _build_asset_details(tls_info, qvs)
+
         findings.append({
             "severity": "info",
             "issue": f"Certificate Detected: {cn}",
             "detail": (
                 f"Issuer: {issuer_org} | Cipher: {cipher_name} ({cipher_bits}-bit) | "
                 f"TLS: {tls_version} | Key exchange: {key_exchange} "
-                f"(group: {crypto['key_exchange_group']}) | "
-                f"Certificate key: {auth_label} (read from {crypto['auth_source']}) | "
+                f"(group: {tls_info['key_exchange_group']}) | "
+                f"Certificate key: {auth_label} (read from {tls_info['auth_source']}) | "
                 f"Expires: {not_after}"
             ),
             "recommendation": None,
@@ -319,15 +681,32 @@ def _scan_web_tls(web_url: str) -> dict:
                 "cipher": cipher_name,
                 "bits": cipher_bits,
                 "tls_version": tls_version,
+                "tls_protocol_id": tls_info["tls_protocol_id"],
                 "key_exchange": key_exchange,
-                "key_exchange_group": crypto["key_exchange_group"],
+                "key_exchange_group": tls_info["key_exchange_group"],
                 "auth_algo": auth_algo,
                 "auth_bits": auth_bits,
-                "auth_source": crypto["auth_source"],
+                "auth_source": tls_info["auth_source"],
                 "key_type": auth_label,
                 "key_size": f"{auth_bits}-bit" if auth_bits else "unknown",
                 "handshake_ms": handshake_ms,
-                "mode": "GCM" if "GCM" in cipher_name else "CBC"
+                "mode": "GCM" if "GCM" in cipher_name else "CBC",
+                "encryption_algorithm": tls_info["encryption_algorithm"],
+                "cipher_hash_algorithm": tls_info["cipher_hash_algorithm"],
+                "hash_algorithm": cert_full["signature_hash_algorithm"],
+                "signature_algorithm_oid": cert_full["signature_algorithm_oid"],
+                "signature_algorithm_name": cert_full["signature_algorithm_name"],
+                "serial_number": cert_full["serial_number"],
+                "issuer_cn": cert_full["issuer_cn"],
+                "issuer_country": cert_full["issuer_country"],
+                "not_before": cert_full["not_before"],
+                "not_after_full": cert_full["not_after"],
+                "san_dns": cert_full["san_dns"],
+                "san_ip": cert_full["san_ip"],
+                "ipv4": tls_info["dns"]["ipv4"],
+                "ipv6": tls_info["dns"]["ipv6"],
+                "libraries": tls_info["libraries"],
+                "classification": asset_details["classification"],
             }
         })
 
@@ -386,22 +765,28 @@ def _scan_web_tls(web_url: str) -> dict:
             pillar_qvs_scores.append(95)
 
     except Exception as e:
-        # The host could not be probed. Report that and nothing else — no cryptographic
-        # claim is made about a host we never reached.
+        # Something failed while processing an already-successful handshake
+        # (e.g. an unexpected cert shape) — report it honestly rather than
+        # claiming a cryptographic result that wasn't actually derived.
         findings.append({
             "severity": "info",
-            "issue": "TLS Probe Failed — Host Not Assessed",
-            "detail": f"Could not complete a TLS handshake with {web_url}: {str(e)}. No cryptographic findings are reported for this host because none were observed.",
+            "issue": "TLS Result Processing Failed — Host Not Assessed",
+            "detail": f"TLS handshake with {web_url} succeeded but result processing failed: {str(e)}. No cryptographic findings are reported for this host.",
             "recommendation": "Verify endpoint availability, DNS resolution and firewall rules, then re-run the scan.",
             "evidence": "measured",
             "inferred_from": None,
         })
         return {"findings": findings, "qvs": None, "scanned": False,
-                "error": str(e), "evidence_summary": _evidence_summary(findings)}
+                "error": str(e), "evidence_summary": _evidence_summary(findings),
+                "asset_details": asset_details}
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
+    if asset_details is not None:
+        asset_details["classification"] = _classify_asset(avg_qvs)
+        asset_details["tag"] = _tag_from_qvs(avg_qvs)
     return {"findings": findings, "qvs": avg_qvs, "scanned": True,
-            "handshake_ms": handshake_ms, "evidence_summary": _evidence_summary(findings)}
+            "handshake_ms": handshake_ms, "evidence_summary": _evidence_summary(findings),
+            "asset_details": asset_details}
 
 
 # ── Pillar B: VPN/TLS Engine ─────────────────────────────────────────────────
@@ -540,7 +925,8 @@ def _scan_vpn_tls(vpn_url: str) -> dict:
         # avoid. Append nothing; avg_qvs below falls through to None.
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
-    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings),
+            "asset_details": _build_asset_details(tls_info, avg_qvs)}
 
 
 # ── Pillar C: API Security Engine ────────────────────────────────────────────
@@ -561,6 +947,45 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
 
     parsed = urlparse(api_url if api_url.startswith("http") else f"https://{api_url}")
     host = parsed.hostname or api_url
+
+    # 0. Full TLS/cert/DNS probe — shared with the other pillars so the API
+    # asset gets the same real algorithm/OID/DNS/library detail, independent
+    # of the mTLS-specific handshake below (which never presents a client
+    # cert on purpose, to test whether mTLS is enforced).
+    tls_info = _get_tls_info(api_url)
+    asset_details = _build_asset_details(tls_info)
+    jwt_alg = NA
+    jwt_oid = NA
+
+    # Score this API asset's own measured TLS crypto the same way every other
+    # pillar does. Without this, an API host that was fully reachable and
+    # returned real key-exchange/certificate data — but happened to trigger
+    # neither the mTLS-enforcement check below nor a bad JWT algorithm —
+    # ended up with populated TLS/cert/OID fields alongside a "Not Assessed"
+    # tag, which is self-contradictory: real crypto WAS measured. Confirmed
+    # live against api.github.com (TLS 1.3 / ECDHE / ECDSA reachable, but
+    # riskScores.api and the asset tag both came back "Not Assessed").
+    if tls_info["reachable"]:
+        api_key_exchange = tls_info["key_exchange"]
+        api_auth_algo = tls_info["auth_algo"]
+        api_auth_bits = tls_info["auth_bits"]
+        api_auth_label = f"{api_auth_algo}-{api_auth_bits}" if api_auth_bits else api_auth_algo
+        api_crypto_qvs = max(_qvs(api_key_exchange), _qvs(api_auth_label))
+        if tls_info["tls_version"] and tls_info["tls_version"] < "TLSv1.3":
+            api_crypto_qvs = max(api_crypto_qvs, 95)
+        pillar_qvs_scores.append(api_crypto_qvs)
+        findings.append({
+            "severity": "info",
+            "issue": f"API TLS Crypto Observed: {api_key_exchange} / {api_auth_label}",
+            "detail": (
+                f"TLS handshake with {host} — TLS: {tls_info['tls_version']} | "
+                f"Key exchange: {api_key_exchange} | Certificate key: {api_auth_label} "
+                f"(read from {tls_info['auth_source']})."
+            ),
+            "recommendation": None,
+            "evidence": "measured",
+            "inferred_from": None,
+        })
 
     # 1. mTLS Detection
     try:
@@ -608,6 +1033,8 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
             
             alg = header.get("alg", "Unknown")
             oid = header.get("oid", None) # Some PQC implementations use OID in header
+            jwt_alg = _na(alg)
+            jwt_oid = _na(oid)
 
             if oid in PQC_OIDS:
                 findings.append({
@@ -640,7 +1067,12 @@ def _scan_api_jwt(api_url: str, jwt_token: str) -> dict:
     # actually measured — the same "unassessed treated as a real score"
     # pattern already fixed in _scan_web_tls.
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
-    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
+    asset_details["classification"] = _classify_asset(avg_qvs)
+    asset_details["tag"] = _tag_from_qvs(avg_qvs)
+    asset_details["jwt_algorithm"] = jwt_alg
+    asset_details["jwt_oid"] = jwt_oid
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings),
+            "asset_details": asset_details}
 
 
 # ── Pillar D: Firmware Integrity Engine ───────────────────────────────────────
@@ -753,7 +1185,8 @@ def _scan_firmware(target: str) -> dict:
         pillar_qvs_scores.append(95)
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
-    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings),
+            "asset_details": _build_asset_details(tls_info, avg_qvs)}
 
 
 # ── Pillar E: Archival Encryption Engine ──────────────────────────────────────
@@ -881,7 +1314,8 @@ def _scan_archival(target: str) -> dict:
         })
 
     avg_qvs = round(sum(pillar_qvs_scores) / len(pillar_qvs_scores)) if pillar_qvs_scores else None
-    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings)}
+    return {"findings": findings, "qvs": avg_qvs, "evidence_summary": _evidence_summary(findings),
+            "asset_details": _build_asset_details(tls_info, avg_qvs)}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -1002,4 +1436,15 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
         "selectorLog": selector_results,
         "pqcAuditTable": audit_table,
         "apiMetrics": api_metrics,
+        # Per-asset detail: classification, hash/encryption/auth/kx algorithms,
+        # OIDs, certificate fields, DNS records, and the actual crypto/TLS/DNS
+        # library versions used to produce this scan's results. Every field is
+        # either a real measurement or N/A — never guessed.
+        "assetDetails": {
+            "web": web_result.get("asset_details"),
+            "vpn": vpn_result.get("asset_details"),
+            "api": api_result.get("asset_details"),
+            "firmware": firmware_result.get("asset_details"),
+            "archival": archival_result.get("asset_details"),
+        },
     }

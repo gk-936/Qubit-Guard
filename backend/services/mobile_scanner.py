@@ -25,7 +25,7 @@ from datetime import datetime
 #      non-static-RSA cipher (i.e. almost everything, since ECDHE dominates
 #      modern TLS) collapsed onto an identical 85 regardless of what was
 #      actually observed — indistinguishable from a hardcoded constant.
-from services.scanner_engine import _derive_crypto_params, _qvs
+from services.scanner_engine import _qvs, _get_tls_info, _build_asset_details
 
 log = logging.getLogger(__name__)
 
@@ -327,30 +327,32 @@ def _probe_app_api_tls(app_id: str, known_domain: str = None, known_domain_basis
     if not api_domain:
         return {"reachable": False}
 
-    try:
-        context = ssl.create_default_context()
-        with socket.create_connection((api_domain, 443), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=api_domain) as tls_sock:
-                cipher = tls_sock.cipher()
-                tls_version = tls_sock.version()
-                der_cert = tls_sock.getpeercert(binary_form=True)
-                crypto = _derive_crypto_params(cipher[0] if cipher else "", tls_version, der_cert)
-                return {
-                    "reachable": True,
-                    "domain": api_domain,
-                    "domain_basis": domain_evidence[api_domain],
-                    "cipher_name": cipher[0] if cipher else "Unknown",
-                    "cipher_bits": cipher[2] if cipher else 0,
-                    "tls_version": tls_version,
-                    "key_exchange": crypto["key_exchange"],
-                    "key_exchange_group": crypto["key_exchange_group"],
-                    "auth_algo": crypto["auth_algo"],
-                    "auth_bits": crypto["auth_bits"],
-                    "auth_source": crypto["auth_source"],
-                }
-    except (OSError, ssl.SSLError, ValueError) as e:
-        log.debug("API TLS probe failed for %s: %s", api_domain, e)
-        return {"reachable": False, "domain": api_domain, "domain_basis": domain_evidence.get(api_domain)}
+    # Reuse the Triad Scanner's own shared TLS probe rather than a separate,
+    # cruder socket handshake here — this is also how mobile results end up
+    # carrying the same real certificate/DNS/library detail (hash algorithm,
+    # signature OID, serial number, SAN records, actual cryptography/OpenSSL/
+    # dnspython versions) shown for every other scanned asset, even though the
+    # "target" here is technically the app's inferred API backend rather than
+    # a URL the user typed in directly.
+    tls_info = _get_tls_info(api_domain)
+    if tls_info["reachable"]:
+        return {
+            "reachable": True,
+            "domain": api_domain,
+            "domain_basis": domain_evidence[api_domain],
+            "cipher_name": tls_info["cipher_name"],
+            "cipher_bits": tls_info["cipher_bits"],
+            "tls_version": tls_info["tls_version"],
+            "key_exchange": tls_info["key_exchange"],
+            "key_exchange_group": tls_info["key_exchange_group"],
+            "auth_algo": tls_info["auth_algo"],
+            "auth_bits": tls_info["auth_bits"],
+            "auth_source": tls_info["auth_source"],
+            "tls_info": tls_info,
+        }
+    log.debug("API TLS probe failed for %s: %s", api_domain, tls_info.get("error"))
+    return {"reachable": False, "domain": api_domain, "domain_basis": domain_evidence.get(api_domain),
+            "tls_info": tls_info}
 
 
 def scan_mobile_app(app_id: str, platform: str) -> dict:
@@ -458,5 +460,13 @@ def scan_mobile_app(app_id: str, platform: str) -> dict:
             "detail": f"Version {store_meta['version']} from {'App Store' if platform == 'iOS' else 'Play Store'}. Size: {store_meta['size']}.",
             "recommendation": None,
         })
+
+    # 4. Full asset detail block — classification, algorithms, OIDs,
+    # certificate fields, DNS records, and the actual library versions used —
+    # same shape as every other scanned asset in the Triad Scanner, so the UI
+    # doesn't need a second code path just because this target is an inferred
+    # app backend rather than a directly-typed URL.
+    tls_info = api_tls.get("tls_info")
+    results["assetDetails"] = _build_asset_details(tls_info, results["pqc_score"]) if tls_info else None
 
     return results

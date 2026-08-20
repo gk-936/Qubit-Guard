@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { sendEmailReport, createSchedule, downloadReportPdf, saveBlob } from '../api';
+import { sendEmailReport, createSchedule, downloadReportPdf, exportCanonicalReport, saveBlob } from '../api';
 import { useScan } from '../context/ScanContext';
 import { useToast } from '../context/ToastContext';
 
@@ -13,7 +13,21 @@ const Reporting = () => {
   const [scheduledEmail, setScheduledEmail] = useState('');
   const [frequency, setFrequency] = useState('daily');
   const [sending, setSending] = useState(false);
-  const [formats, setFormats] = useState({ pdf: true, excel: false, json: false });
+  const [formats, setFormats] = useState({ pdf: true, csv: false, json: false, xml: false });
+  const [exporting, setExporting] = useState(null);
+
+  const handleExportCanonical = async (fmt) => {
+    setExporting(fmt);
+    try {
+      const res = await exportCanonicalReport(fmt, activeScanId || undefined);
+      saveBlob(res.data, `qubit-guard-report-${activeScanId || 'latest'}.${fmt}`);
+    } catch (e) {
+      console.error(`Canonical ${fmt} export failed`, e);
+      showToast(`Could not export the ${fmt.toUpperCase()} report — has a scan been run yet?`, 'error');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const handleSendEmail = async () => {
     if (!email) {
@@ -118,10 +132,13 @@ const Reporting = () => {
                   <input type="checkbox" checked={formats.pdf} onChange={e => setFormats({...formats, pdf: e.target.checked})} /> PDF (Standard)
                 </label>
                 <label className="checkbox-item">
-                  <input type="checkbox" checked={formats.excel} onChange={e => setFormats({...formats, excel: e.target.checked})} /> Excel (.xlsx)
+                  <input type="checkbox" checked={formats.csv} onChange={e => setFormats({...formats, csv: e.target.checked})} /> CSV
                 </label>
                 <label className="checkbox-item">
-                  <input type="checkbox" checked={formats.json} onChange={e => setFormats({...formats, json: e.target.checked})} /> JSON (CycloneDX)
+                  <input type="checkbox" checked={formats.json} onChange={e => setFormats({...formats, json: e.target.checked})} /> JSON
+                </label>
+                <label className="checkbox-item">
+                  <input type="checkbox" checked={formats.xml} onChange={e => setFormats({...formats, xml: e.target.checked})} /> XML
                 </label>
               </div>
             </div>
@@ -202,6 +219,28 @@ const Reporting = () => {
         <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px', display: 'flex', gap: '15px' }}>
           <button className="btn btn-gold" style={{ padding: '12px 30px' }} onClick={handleDownloadPDF}>🚀 Generate Official PDF</button>
           <button className="btn btn-outline" style={{ padding: '12px 30px' }} onClick={handleSaveSchedule}>💾 Save Scan Schedule</button>
+        </div>
+
+        <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px' }}>
+          <label className="form-label" style={{ color: '#1A5ACC', fontWeight: 700 }}>5. CANONICAL PER-ASSET REPORT</label>
+          <p style={{ fontSize: '11px', color: '#888', margin: '6px 0 12px 0' }}>
+            PDF/XML/JSON/CSV below are all rendered from the exact same scan data (per-asset tag, TLS/certificate/crypto
+            fields, OIDs, DNS records, library versions, and recommendations) — guaranteed consistent with each other and
+            with the Triad Scanner / Discovery pages.
+          </p>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            {['pdf', 'json', 'xml', 'csv'].map(fmt => (
+              <button
+                key={fmt}
+                className="btn btn-outline btn-sm"
+                style={{ padding: '10px 20px', textTransform: 'uppercase' }}
+                onClick={() => handleExportCanonical(fmt)}
+                disabled={exporting === fmt}
+              >
+                {exporting === fmt ? '⏳' : '📄'} {fmt}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>

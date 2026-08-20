@@ -11,6 +11,7 @@ from models import DashboardSummary, InventoryStat, PostureStat, CbomVulnerabili
 from services.cbom_generator import generate_cyclonedx
 from services.mail_service import send_scan_report, send_scan_report_async, generate_professional_pdf, _extract_bank_name
 from services.audit_service import log_audit_event
+from services import report_service
 from pydantic import BaseModel
 
 class EmailRequest(BaseModel):
@@ -491,8 +492,13 @@ async def send_report(req: EmailRequest, db: Session = Depends(get_db)):
         "vpn_findings": vpn_findings,
         "mobile_findings": mobile_findings,
         "iot_findings": iot_findings,
+        # Same canonical dict the /report/export/{fmt} endpoint renders — so an
+        # emailed PDF/JSON/XML/CSV attachment always matches what a manual
+        # download of the same scan would produce. None if there's no scan yet;
+        # mail_service falls back to its legacy per-format builders in that case.
+        "canonical_report": report_service.build_canonical_report(db, latest_scan.scan_id) if latest_scan else None,
     }
-    
+
     try:
         # 10-second hard timeout so the button never hangs forever
         success, detail = await asyncio.wait_for(
@@ -595,5 +601,41 @@ def download_pdf_report(type: str = "executive", db: Session = Depends(get_db)):
         headers={
             "Content-Disposition": f"attachment; filename={filename}"
         }
+    )
+
+
+@router.get("/report/export/{fmt}")
+def export_canonical_report(fmt: str, scan_id: str = None, db: Session = Depends(get_db)):
+    """Canonical multi-format scan report — PDF/XML/JSON/CSV are all rendered
+    from the exact same `build_canonical_report()` dict (see
+    services/report_service.py), so per-asset classification, tag, TLS/cert/
+    crypto/OID/DNS fields, library versions, and recommendations are
+    identical across every format. Defaults to the most recent scan; pass
+    ?scan_id=... for a specific one. 404s rather than silently substituting a
+    different scan when the requested one doesn't exist.
+    """
+    fmt = fmt.lower()
+    if fmt not in ("pdf", "json", "xml", "csv"):
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Unsupported format: {fmt}. Use pdf, json, xml, or csv."})
+
+    report = report_service.build_canonical_report(db, scan_id)
+    if not report:
+        return JSONResponse(status_code=404, content={"success": False, "message": "No scan found to report on."})
+
+    bank_name = _extract_bank_name(report["web_url"] or "")
+    bank_id = bank_name.replace(" ", "_").replace("Bank", "").strip("_") or "QVS"
+    filename = f"{bank_id}_QubitGuard_Report_{report['scan_id']}.{fmt}"
+
+    if fmt == "pdf":
+        content = report_service.to_pdf_bytes(report, bank_name)
+        media_type = "application/pdf"
+    else:
+        renderer, media_type = report_service.EXPORTERS[fmt]
+        content = renderer(report)
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 

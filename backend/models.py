@@ -87,6 +87,7 @@ class ScanResult(Base):
     risk_scores_json = Column(Text, default="{}") # Per-pillar QVS
     cbom_json = Column(Text, default="{}")        # Generated CBOM
     api_metrics_json = Column(Text, default="{}") # Persisted API metrics
+    asset_details_json = Column(Text, default="{}") # Per-asset classification/algorithms/certs/DNS/library versions
     overall_qvs = Column(Float, default=0.0)
 
 
