@@ -13,7 +13,7 @@ const Reporting = () => {
   const [scheduledEmail, setScheduledEmail] = useState('');
   const [frequency, setFrequency] = useState('daily');
   const [sending, setSending] = useState(false);
-  const [formats, setFormats] = useState({ pdf: true, csv: false, json: false, xml: false });
+  const [formats, setFormats] = useState({ pdf: true, excel: false, json: false, xml: false });
   const [exporting, setExporting] = useState(null);
 
   const handleExportCanonical = async (fmt) => {
@@ -29,6 +29,24 @@ const Reporting = () => {
     }
   };
 
+  const handleExportFormat = async (fmt) => {
+    showToast(`Generating ${fmt.toUpperCase()} report...`, 'info');
+    try {
+      if (fmt === 'pdf') {
+        const res = await downloadReportPdf(reportType);
+        saveBlob(res.data, `pqc-audit-${reportType}.pdf`);
+      } else {
+        const api = await import('../api');
+        const res = await api.exportCbom(fmt);
+        saveBlob(res.data, `pqc-cbom-audit.${fmt}`);
+      }
+      showToast(`Exported ${fmt.toUpperCase()} report successfully.`, 'success');
+    } catch (e) {
+      console.error(`${fmt} export failed`, e);
+      showToast(`Could not generate ${fmt.toUpperCase()} report.`, 'error');
+    }
+  };
+
   const handleSendEmail = async () => {
     if (!email) {
       showToast('Please enter a valid email address.', 'error');
@@ -41,7 +59,6 @@ const Reporting = () => {
       if (response.data.delivered) {
         showToast(`Success! ${reportType.toUpperCase()} report dispatched to ${email}.`, 'success');
       } else {
-        // Report was generated but not delivered — never claim it was sent.
         showToast(response.data.message || 'Report generated but NOT sent. Check SMTP config.', 'error');
       }
     } catch (err) {
@@ -52,16 +69,7 @@ const Reporting = () => {
     }
   };
 
-  const handleDownloadPDF = async () => {
-    showToast('Generating official PQC audit...', 'info');
-    try {
-      const res = await downloadReportPdf(reportType);
-      saveBlob(res.data, `pqc-audit-${reportType}.pdf`);
-    } catch (e) {
-      console.error('PDF download failed', e);
-      showToast('Could not generate the report PDF.', 'error');
-    }
-  };
+  const handleDownloadPDF = () => handleExportFormat('pdf');
 
   const handleSaveSchedule = async () => {
     if (isScheduled && !scheduledEmail && !email) {
@@ -127,18 +135,18 @@ const Reporting = () => {
           <div>
             <div className="form-group">
               <label className="form-label" style={{ color: '#1A5ACC', fontWeight: 700 }}>1. CHOOSE OUTPUT FORMATS</label>
-              <div className="checkbox-group" style={{ display: 'flex', gap: '20px', marginTop: '10px' }}>
+              <div className="checkbox-group" style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', marginTop: '10px' }}>
                 <label className="checkbox-item">
                   <input type="checkbox" checked={formats.pdf} onChange={e => setFormats({...formats, pdf: e.target.checked})} /> PDF (Standard)
                 </label>
                 <label className="checkbox-item">
-                  <input type="checkbox" checked={formats.csv} onChange={e => setFormats({...formats, csv: e.target.checked})} /> CSV
+                  <input type="checkbox" checked={formats.json} onChange={e => setFormats({...formats, json: e.target.checked})} /> JSON (CycloneDX)
                 </label>
                 <label className="checkbox-item">
-                  <input type="checkbox" checked={formats.json} onChange={e => setFormats({...formats, json: e.target.checked})} /> JSON
+                  <input type="checkbox" checked={formats.xml} onChange={e => setFormats({...formats, xml: e.target.checked})} /> XML (CycloneDX)
                 </label>
                 <label className="checkbox-item">
-                  <input type="checkbox" checked={formats.xml} onChange={e => setFormats({...formats, xml: e.target.checked})} /> XML
+                  <input type="checkbox" checked={formats.excel} onChange={e => setFormats({...formats, excel: e.target.checked})} /> CSV Spreadsheet
                 </label>
               </div>
             </div>
@@ -216,9 +224,12 @@ const Reporting = () => {
           </div>
         </div>
 
-        <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px', display: 'flex', gap: '15px' }}>
-          <button className="btn btn-gold" style={{ padding: '12px 30px' }} onClick={handleDownloadPDF}>🚀 Generate Official PDF</button>
-          <button className="btn btn-outline" style={{ padding: '12px 30px' }} onClick={handleSaveSchedule}>💾 Save Scan Schedule</button>
+        <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button className="btn btn-gold" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('pdf')}>📄 Download PDF</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('json')}>📦 Download JSON</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('xml')}>⚙️ Download XML</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('csv')}>📊 Download CSV</button>
+          <button className="btn btn-gold" style={{ padding: '12px 20px', marginLeft: 'auto' }} onClick={handleSaveSchedule}>💾 Save Schedule</button>
         </div>
 
         <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px' }}>

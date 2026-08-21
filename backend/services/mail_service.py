@@ -927,11 +927,27 @@ Research and Development: Qubit-Guard v2.0
                 payload = json.dumps(scan_data, indent=2).encode("utf-8")
                 filename = f"{bank_id}_qvs_audit_{report_type.lower()}.json"
 
-            elif fmt == "excel":
+            elif fmt == "xml":
+                # Legacy path (no canonical_report supplied) — CycloneDX XML.
+                import xml.etree.ElementTree as ET
+                root = ET.Element("bom", {"xmlns": "http://cyclonedx.org/schema/bom/1.5", "version": "1"})
+                components = ET.SubElement(root, "components")
+                cbom_items = scan_data.get("cbom", {}).get("components", [])
+                for item in cbom_items:
+                    c = ET.SubElement(components, "component", {"type": "library"})
+                    ET.SubElement(c, "name").text = item.get("component", item.get("name", "Unknown"))
+                    ET.SubElement(c, "version").text = item.get("version", "v1.0")
+                    props = ET.SubElement(c, "properties")
+                    ET.SubElement(props, "property", {"name": "crypto:algorithm"}).text = item.get("algorithm", item.get("crypto", "Classical"))
+                    ET.SubElement(props, "property", {"name": "crypto:quantum-safe"}).text = str(item.get("quantumSafe", item.get("quantum_safe", False)))
+                payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                filename = f"{bank_id}_cbom_cyclonedx_{report_type.lower()}.xml"
+
+            elif fmt in ("excel", "csv"):
                 # Legacy path: CBOM-only CSV.
                 cbom_items = scan_data.get("cbom", {}).get("components", [])
                 excel_lines = ["Component,Version,Algorithm,Quantum-Safe,Risk,Action"]
-                for item in cbom_items[:50]:  # Limit to 50 for readability
+                for item in cbom_items[:50]:
                     comp = item.get("component", item.get("name", "Unknown Service"))
                     ver = item.get("version", "v1.0")
                     algo = item.get("algorithm", item.get("crypto", "Classical"))

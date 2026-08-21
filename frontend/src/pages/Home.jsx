@@ -254,7 +254,7 @@ const Home = () => {
         </div>
         <div>
           <div className="card">
-            <div className="card-title"><span className="ct-icon">⭐</span>Cyber Rating Distribution</div>
+            <div className="card-title"><span className="ct-icon">⭐</span>Vulnerability Severity Distribution</div>
             <div style={{ height: '180px' }}>
               <Bar
                 data={{
@@ -268,11 +268,13 @@ const Home = () => {
                 options={{ maintainAspectRatio: false, plugins: { legend: { display: false } } }}
               />
             </div>
-            <div className="grid-4" style={{ gap: '8px', marginTop: '12px' }}>
-              <div style={{ textAlign: 'center', padding: '8px', background: '#E8F0FF', borderRadius: '8px' }}><div style={{ fontWeight: 700, color: '#1A5ACC', fontSize: '13px' }}>Tier 1</div><div style={{ fontSize: '10px', color: '#666' }}>Excellent</div></div>
-              <div style={{ textAlign: 'center', padding: '8px', background: '#FFF0D0', borderRadius: '8px' }}><div style={{ fontWeight: 700, color: '#8A5000', fontSize: '13px' }}>Tier 2</div><div style={{ fontSize: '10px', color: '#666' }}>Good</div></div>
-              <div style={{ textAlign: 'center', padding: '8px', background: '#E8FFE8', borderRadius: '8px' }}><div style={{ fontWeight: 700, color: '#1A7A1A', fontSize: '13px' }}>Tier 3</div><div style={{ fontSize: '10px', color: '#666' }}>Satisfactory</div></div>
-              <div style={{ textAlign: 'center', padding: '8px', background: '#FFE8E8', borderRadius: '8px' }}><div style={{ fontWeight: 700, color: '#C0272D', fontSize: '13px' }}>Tier 4</div><div style={{ fontSize: '10px', color: '#666' }}>Needs Help</div></div>
+            <div style={{ textAlign: 'center', marginTop: '12px' }}>
+              <span
+                onClick={() => navigate('/rating')}
+                style={{ cursor: 'pointer', fontSize: '11px', color: '#1A6BAA', textDecoration: 'underline', fontFamily: 'var(--mono)' }}
+              >
+                View Cyber Rating for this scan →
+              </span>
             </div>
           </div>
           <div className="card">

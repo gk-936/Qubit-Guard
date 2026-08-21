@@ -20,14 +20,6 @@ import dns.reversename
 import json
 import ssl
 
-# Reuse the Triad Scanner's own real crypto derivation, QVS scale, and
-# 3-tier tag — every asset scored anywhere in this app (Triad pillars,
-# mobile, and now discovered subdomains) is scored on the exact same
-# scale, from the exact same TLS-handshake/certificate measurement logic,
-# not a second parallel scheme.
-from services.scanner_engine import _derive_crypto_params, _qvs, _tag_from_qvs
-from services.pqc_algorithms import get_algorithm_for_pillar, PQC_ALGORITHM_REGISTRY
-
 log = logging.getLogger(__name__)
 
 # --- 3. The Fuel: Expanded Dictionary Scope ---
@@ -397,105 +389,6 @@ def fetch_asn_ip_range_hosts(domain: str, max_ips_to_sweep: int = 150) -> list:
         return []
     return reverse_dns_hosts(set(candidate_ips), domain, max_workers=30)
 
-def _pillar_pqc_migration(pillars: list) -> dict:
-    """Pick the single most relevant PQC migration target for an asset from
-    the registry, using the pillar it was actually classified into. Reuses
-    `get_algorithm_for_pillar` (services/pqc_algorithms.py) — the same 6-
-    algorithm registry the rest of the app draws from — never a name made
-    up here.
-
-    Preference order per pillar type reflects each algorithm's own
-    `recommended_for` text in the registry: VPN/Web need a KEM for their key
-    exchange first; API needs a signature algorithm for JWT/mTLS first.
-    """
-    candidates = []
-    for pillar in pillars:
-        candidates.extend(get_algorithm_for_pillar(pillar))
-    if not candidates:
-        return None
-
-    def _pref_key(algo):
-        is_vpn_or_web = any(p in ("VPN/TLS", "Web/TLS") for p in pillars)
-        if is_vpn_or_web:
-            return 0 if algo["algorithm_type"] == "KEM" else 1
-        return 0 if algo["algorithm_type"] == "Signature" else 1
-
-    candidates.sort(key=_pref_key)
-    chosen = candidates[0]
-    return {
-        "algorithm_id": chosen["id"],
-        "formal_name": chosen["formal_name"],
-        "fips_standard": chosen["fips_standard"],
-        "recommended_parameter": list(chosen["parameter_sets"].keys())[0],
-        "recommended_for": chosen["recommended_for"],
-    }
-
-
-def _asset_recommendations(host: str, pillars: list, crypto: dict, qvs, tls_version: str) -> list:
-    """Build recommendations from this specific asset's own measured findings
-    — never generic advice. Each entry names the detected issue, its
-    priority (derived from the same QVS this asset was scored with), what
-    to change, and — where the asset's pillar maps to one — a concrete PQC
-    migration target pulled from the registry.
-    """
-    if qvs is None:
-        return []
-
-    recs = []
-    priority = "critical" if qvs >= 80 else "high" if qvs >= 50 else "medium" if qvs >= 20 else "info"
-    migration = _pillar_pqc_migration(pillars)
-
-    key_exchange = crypto.get("key_exchange")
-    auth_algo = crypto.get("auth_algo")
-    auth_bits = crypto.get("auth_bits")
-
-    if key_exchange and key_exchange not in ("Unknown",) and _qvs(key_exchange) >= 20:
-        recs.append({
-            "issue": f"{key_exchange} key exchange negotiated on {host}",
-            "priority": priority,
-            "change": (
-                f"Replace {key_exchange} key exchange with a hybrid classical+PQC KEM "
-                f"({migration['algorithm_id']}) once the server stack supports it."
-                if migration else f"Enable a hybrid PQC key-exchange group for {key_exchange} on {host}."
-            ),
-            "pqc_migration": migration,
-            "evidence": f"Measured during TLS handshake with {host}",
-        })
-
-    if auth_algo and auth_algo not in ("Unknown",) and _qvs(f"{auth_algo}-{auth_bits}" if auth_bits else auth_algo) >= 20:
-        recs.append({
-            "issue": f"Certificate signed with {auth_algo}{f'-{auth_bits}' if auth_bits else ''} on {host}",
-            "priority": priority,
-            "change": (
-                f"Reissue the certificate under {migration['algorithm_id']} "
-                f"({migration['recommended_parameter']}) or a hybrid classical+PQC chain once the CA supports it."
-                if migration else f"Reissue the {host} certificate under a PQC or hybrid classical+PQC signature scheme."
-            ),
-            "pqc_migration": migration,
-            "evidence": f"Read from the certificate public key presented by {host}",
-        })
-
-    if tls_version and tls_version < "TLSv1.3":
-        recs.append({
-            "issue": f"{host} negotiated {tls_version}, which cannot carry hybrid PQC cipher suites",
-            "priority": "high",
-            "change": f"Enforce TLS 1.3 minimum on {host} before enabling any hybrid PQC key-exchange group.",
-            "pqc_migration": None,
-            "evidence": f"Measured TLS version during handshake with {host}",
-        })
-
-    if not recs:
-        recs.append({
-            "issue": f"No quantum-vulnerable primitive detected on {host}",
-            "priority": "info",
-            "change": "No change required — continue monitoring as cipher suite support evolves.",
-            "pqc_migration": None,
-            "evidence": f"Measured during TLS handshake with {host}",
-        })
-
-    return recs
-
-
 def probe_host(host: str, base_domain: str) -> dict:
     """
     Worker function to probe a single host.
@@ -511,14 +404,8 @@ def probe_host(host: str, base_domain: str) -> dict:
         "ip": resolved_ip,
         "pillars": [],
         "pqc_ready": False,
-        "qvs_score": None,
-        "tag": _tag_from_qvs(None),
-        "score_factors": [],
-        "recommendations": [],
         "details": {}
     }
-    crypto_result = None
-    tls_version_raw = None
 
     # 1. Check for Web/HTTPS (Pillar A)
     web_active = False
@@ -542,26 +429,21 @@ def probe_host(host: str, base_domain: str) -> dict:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
 
-                tls_version_raw = tls_sock.version()
-                asset_info["details"]["tls_version"] = (
-                    "1.3 (PQC-Ready)" if tls_version_raw == "TLSv1.3" else tls_version_raw
-                )
+                # Captured here so the QVS step below can score off the cipher
+                # this same handshake already negotiated, instead of opening a
+                # second TLS connection to the same host just to ask again.
+                cipher = tls_sock.cipher()
+                asset_info["_cipher_name"] = cipher[0] if cipher else None
 
-                # Real crypto derivation — the same certificate-based logic the
-                # Triad Scanner's web pillar uses (never guessed from the cipher
-                # suite name, which for TLS 1.3 encodes neither the key exchange
-                # nor the signature algorithm). This is what actually drives this
-                # asset's score/tag/recommendations below, not the TLS-1.3-only
-                # boolean this used to be limited to.
-                try:
-                    cipher = tls_sock.cipher()
-                    der_cert = tls_sock.getpeercert(binary_form=True)
-                    crypto_result = _derive_crypto_params(
-                        cipher[0] if cipher else "", tls_version_raw, der_cert
-                    )
-                    asset_info["details"]["cipher"] = cipher[0] if cipher else "Unknown"
-                except Exception as e:
-                    log.debug("Crypto derivation failed for %s: %s", host, e)
+                # TLS 1.3 alone is NOT evidence of post-quantum readiness — it
+                # just means the TLS 1.3 protocol was negotiated, which almost
+                # always still uses a classical (X25519/ECDHE) key exchange
+                # today. Python's stdlib ssl module doesn't expose the
+                # negotiated key-share group, so this code has no way to
+                # confirm a real PQC hybrid group (e.g. x25519_kyber768) was
+                # used. pqc_ready is set later, from the actual cipher name via
+                # _qvs() — the only evidence-based signal available here.
+                asset_info["details"]["tls_version"] = tls_sock.version()
 
                 # SAN Extraction
                 cert = tls_sock.getpeercert()
@@ -648,48 +530,113 @@ def probe_host(host: str, base_domain: str) -> dict:
     if web_active and not asset_info["pillars"]:
         asset_info["pillars"].append("Web/TLS")
 
-    # ── Score this asset individually from what was actually measured on it ──
-    # No fabricated/default score: an asset whose TLS handshake never yielded
-    # cert/cipher data (crypto_result is None) gets qvs_score=None and tag
-    # "Not Assessed", exactly like an unreachable Triad pillar — never a
-    # default numeric score.
-    if crypto_result is not None:
-        key_exchange = crypto_result["key_exchange"]
-        auth_algo = crypto_result["auth_algo"]
-        auth_bits = crypto_result["auth_bits"]
-        auth_label = f"{auth_algo}-{auth_bits}" if auth_bits else auth_algo
-        kx_qvs = _qvs(key_exchange)
-        auth_qvs = _qvs(auth_label)
-        qvs_score = max(kx_qvs, auth_qvs)
-        # TLS 1.2 and below can never carry a hybrid PQC cipher suite regardless
-        # of the individual algorithm scores above — reflect that in the score
-        # actually assigned, the same rule the Triad Scanner's web pillar applies.
-        if tls_version_raw and tls_version_raw < "TLSv1.3":
-            qvs_score = max(qvs_score, 95)
+    # Compute per-asset QVS score and Tag (LEGACY, STANDARD, ELITEPQC).
+    # Scored off the cipher the Web/TLS probe above already negotiated —
+    # NOT a second handshake. A per-host re-probe here would double the
+    # network round-trips across the ~130+ dictionary candidates (plus
+    # permutation/SAN/PTR passes), which is exactly what made discovery slow.
+    cipher_name = asset_info.pop("_cipher_name", None)
+    if web_active and cipher_name:
+        from services.scanner_engine import _qvs
 
-        asset_info["qvs_score"] = qvs_score
-        asset_info["tag"] = _tag_from_qvs(qvs_score)
-        asset_info["pqc_ready"] = asset_info["tag"] == "ElitePQC"
-        asset_info["score_factors"] = [
-            f"TLS version: {tls_version_raw or 'unknown'}",
-            f"Key exchange: {key_exchange} (QVS {kx_qvs})",
-            f"Certificate key: {auth_label} (QVS {auth_qvs}, read from {crypto_result['auth_source']})",
-            f"Asset score = weaker of key exchange and certificate key = {qvs_score}/100",
-        ]
-        asset_info["recommendations"] = _asset_recommendations(
-            host, asset_info["pillars"], crypto_result, qvs_score, tls_version_raw
-        )
+        # A TLS 1.3 cipher name alone never reveals the key-exchange group
+        # (classical vs. real hybrid-PQC) — only a TLS 1.3 host gets this
+        # extra raw-socket probe (tls_kex_probe.py), which reads that group
+        # directly off the wire. TLS 1.2 hosts skip it entirely: their cipher
+        # name already names the key exchange unambiguously, so a second
+        # connection would just be the redundant round-trip already fixed once.
+        score_target = cipher_name
+        tls_ver_for_kex = asset_info["details"].get("tls_version", "")
+        if "1.3" in tls_ver_for_kex:
+            try:
+                from services.tls_kex_probe import probe_key_exchange
+                kex = probe_key_exchange(host)
+                if kex["reachable"] and kex["group"]:
+                    score_target = kex["group"]
+                    asset_info["details"]["key_exchange_group"] = kex["group"]
+            except Exception as e:
+                log.debug("TLS 1.3 key-exchange probe failed for %s: %s", host, e)
+
+        asset_info["qvs"] = _qvs(score_target)
+        asset_info["qvs_evidence"] = "measured"
+        # Surfaced so downstream consumers (CBOM generation) can report what
+        # was actually negotiated instead of guessing/fabricating an algorithm.
+        asset_info["details"]["cipher"] = cipher_name
+
+        # Explains WHY the tag below landed where it did — "LEGACY" alone reads
+        # identically for a genuinely outdated TLS 1.2 host and a fully current
+        # TLS 1.3 host that just happens to use classical (non-PQC) key
+        # exchange, which are very different situations a user can't tell
+        # apart from the bare tag. This makes the actual measured reason visible.
+        kex_group = asset_info["details"].get("key_exchange_group")
+        if kex_group:
+            asset_info["tag_reason"] = f"Classical {kex_group} key exchange measured over {tls_ver_for_kex} (quantum-vulnerable)" if asset_info["qvs"] >= 20 \
+                else f"Hybrid-PQC {kex_group} key exchange measured over {tls_ver_for_kex}"
+        else:
+            asset_info["tag_reason"] = f"{cipher_name} cipher suite measured over {tls_ver_for_kex or asset_info['details'].get('tls_version', 'TLS')}"
     else:
-        asset_info["score_factors"] = ["No TLS handshake data was captured for this asset — not scored."]
+        # No cipher was captured (probe never reached the handshake, or the
+        # host isn't web-active at all) — nothing measured, so this can only
+        # ever be a rough guess, never a "ready" claim.
+        tls_ver = asset_info["details"].get("tls_version", "")
+        if "1.2" in tls_ver:
+            asset_info["qvs"] = 85
+        else:
+            asset_info["qvs"] = 95
+        asset_info["qvs_evidence"] = "heuristic"
+        asset_info["tag_reason"] = f"Estimated from {tls_ver or 'no TLS response'} alone — cipher suite not captured"
+
+    # pqc_ready is now purely evidence-based: only true if the negotiated
+    # cipher actually matched a known PQC/hybrid-PQC entry in QVS_MAP (score
+    # < 20). Given Python's stdlib ssl module can't see the real key-share
+    # group, this will honestly read False for virtually all hosts today —
+    # which is correct: claiming a host is "PQC-Ready" off TLS 1.3 alone (the
+    # old behavior) was a guess, not a measurement.
+    asset_info["pqc_ready"] = asset_info["qvs"] < 20
+
+    # Assign Tag
+    q = asset_info["qvs"]
+    if q < 20:
+        asset_info["tag"] = "ELITEPQC"
+    elif q < 80:
+        asset_info["tag"] = "STANDARD"
+    else:
+        asset_info["tag"] = "LEGACY"
 
     return asset_info if asset_info["pillars"] else None
 
-def discover_pnb_assets(target_base: str) -> dict:
+def normalize_host(url_or_host: str) -> str:
+    """Strip a URL down to its bare hostname, the same way discover_pnb_assets
+    keys its host set — so callers can match a Triad-scan target against a
+    discovered host without worrying about scheme/path differences."""
+    parsed = urlparse(url_or_host if url_or_host.startswith("http") else f"https://{url_or_host}")
+    return parsed.hostname or url_or_host
+
+
+def discover_pnb_assets(target_base: str, prescanned: dict = None, progress_cb=None) -> dict:
     """
     Real asset discovery engine — DNS brute-force, zone transfer,
     TLS SAN extraction, and CSP/robots.txt scraping.
     Returns only genuinely discovered assets.
+
+    prescanned, if given, maps normalized hostname -> {"qvs": int, "pqc_ready": bool,
+    "tls_version": str}. Hosts already covered by perform_triad_scan (the
+    caller's web/vpn/api targets) can be passed here so this function skips
+    re-probing them with a second TLS handshake and instead reuses the
+    Triad scan's own measured result for that host.
+
+    progress_cb, if given, is called as progress_cb(percent: int, stage: str)
+    at each phase boundary — purely a UI progress hook, behavior and results
+    are identical whether or not it's passed.
     """
+    def _report(pct, stage):
+        if progress_cb:
+            try:
+                progress_cb(pct, stage)
+            except Exception:
+                pass
+
+    prescanned = prescanned or {}
     if not target_base:
         return {"error": "Invalid target"}
 
@@ -717,6 +664,7 @@ def discover_pnb_assets(target_base: str) -> dict:
         "wayback": fetch_wayback_hosts,
         "asn": fetch_asn_ip_range_hosts,
     }
+    _report(3, "Gathering OSINT sources (DNS, crt.sh, Cert Spotter, Wayback, RIPEstat)...")
     gathered = {}
     with ThreadPoolExecutor(max_workers=len(gather_sources)) as executor:
         future_to_source = {executor.submit(fn, base_domain): name for name, fn in gather_sources.items()}
@@ -753,14 +701,28 @@ def discover_pnb_assets(target_base: str) -> dict:
     for asn_host in asn_results:
         targets_to_probe.add(asn_host)
 
+    # Hosts perform_triad_scan already scanned (the caller's web/vpn/api
+    # targets) get skipped here — no point re-opening a TLS connection to
+    # get a QVS score we already measured a moment ago.
+    targets_to_probe -= set(prescanned.keys())
+
     discovered_assets = []
     seen_hosts = set()
 
     # 5. Threaded probing across all targets
+    _report(10, f"Probing {len(targets_to_probe)} candidate subdomains...")
     with ThreadPoolExecutor(max_workers=30) as executor:
         future_to_host = {executor.submit(probe_host, host, base_domain): host for host in targets_to_probe}
+        total_pass1 = len(future_to_host) or 1
+        done_pass1 = 0
         for future in as_completed(future_to_host):
             asset = future.result()
+            done_pass1 += 1
+            if done_pass1 % 10 == 0 or done_pass1 == total_pass1:
+                # Dictionary probing is the single slowest phase, so it gets
+                # the widest percent band (10%-55%) to keep the bar moving
+                # smoothly instead of sitting still for most of the scan.
+                _report(10 + int(45 * done_pass1 / total_pass1), f"Probing candidate subdomains ({done_pass1}/{total_pass1})...")
             if asset and asset["host"] not in seen_hosts:
                 discovered_assets.append(asset)
                 seen_hosts.add(asset["host"])
@@ -775,6 +737,7 @@ def discover_pnb_assets(target_base: str) -> dict:
         # 6. Probe permuted targets (second pass)
         new_targets = targets_to_probe - seen_hosts
         if new_targets:
+            _report(58, f"Probing {len(new_targets)} permutation variants...")
             perm_futures = {executor.submit(probe_host, host, base_domain): host for host in new_targets}
             for future in as_completed(perm_futures):
                 asset = future.result()
@@ -783,6 +746,7 @@ def discover_pnb_assets(target_base: str) -> dict:
                     seen_hosts.add(asset["host"])
 
     # 7. Extract SANs from discovered TLS assets for additional hosts
+    _report(70, "Extracting SANs from discovered certificates...")
     san_hosts = set()
     for asset in discovered_assets:
         for san in asset.get("details", {}).get("discovered_sans", []):
@@ -798,6 +762,7 @@ def discover_pnb_assets(target_base: str) -> dict:
                     discovered_assets.append(asset)
                     seen_hosts.add(asset["host"])
 
+    _report(82, "Running reverse-DNS on discovered IPs...")
     # 8. Reverse-DNS on every IP found so far — a genuinely different signal
     # from everything above (asks DNS directly, doesn't guess a name and
     # check it), can surface hostnames never in the wordlist, a certificate,
@@ -814,59 +779,51 @@ def discover_pnb_assets(target_base: str) -> dict:
                     discovered_assets.append(asset)
                     seen_hosts.add(asset["host"])
 
-    # ── Bank-wide overall score, derived ONLY from the individual asset scores
-    # computed above — never a separate generic website-level computation.
-    # An asset with qvs_score=None (unreachable/unscored) contributes nothing,
-    # the same "not assessed means excluded, not zero" rule the Triad pillars
-    # use.
-    scored_assets = [a for a in discovered_assets if a.get("qvs_score") is not None]
-    if scored_assets:
-        avg_qvs = sum(a["qvs_score"] for a in scored_assets) / len(scored_assets)
-        overall_rating = round(max(0, 1000 - (avg_qvs * 8)))
-        overall_score = {
-            "qvs_average": round(avg_qvs, 1),
-            "rating": overall_rating,
-            "tag": _tag_from_qvs(avg_qvs),
-            "assets_scored": len(scored_assets),
-            "assets_total": len(discovered_assets),
-            "factors": [
-                f"{len(scored_assets)} of {len(discovered_assets)} discovered assets returned a real TLS measurement and were scored.",
-                f"Overall QVS = unweighted mean of those {len(scored_assets)} individual asset scores = {round(avg_qvs, 1)}/100.",
-                f"Rating = 1000 − (QVS × 8) = {overall_rating}/1000.",
-                f"Legacy tag: {sum(1 for a in scored_assets if a['tag'] == 'Legacy')} asset(s). "
-                f"Standard tag: {sum(1 for a in scored_assets if a['tag'] == 'Standard')} asset(s). "
-                f"ElitePQC tag: {sum(1 for a in scored_assets if a['tag'] == 'ElitePQC')} asset(s).",
-            ],
-        }
-    else:
-        overall_score = {
-            "qvs_average": None, "rating": None, "tag": "Not Assessed",
-            "assets_scored": 0, "assets_total": len(discovered_assets),
-            "factors": ["No discovered asset returned a real TLS measurement, so no bank-wide score can be computed."],
-        }
-
-    # ── PQC algorithm distribution — tallies the SAME 6-algorithm registry
-    # used everywhere else in the app (services/pqc_algorithms.py), counted
-    # from the actual migration recommendation generated for each scored,
-    # non-ElitePQC asset above. Every one of the 6 families is always present
-    # (at 0 if unused) so the chart never implies an algorithm doesn't exist;
-    # nothing here is invented — it's a tally of real per-asset recommendations.
-    pqc_distribution = {algo_id: 0 for algo_id in PQC_ALGORITHM_REGISTRY.keys()}
-    for asset in scored_assets:
-        if asset["tag"] == "ElitePQC":
+    _report(92, "Compiling asset inventory and QVS scores...")
+    # Fold the prescanned (Triad-scan-covered) hosts into the result set,
+    # reusing their already-measured QVS instead of a fresh probe. A plain
+    # DNS lookup (no TLS handshake) is still fine here just to show an IP.
+    for host, info in prescanned.items():
+        if host in seen_hosts:
             continue
-        for rec in asset.get("recommendations", []):
-            migration = rec.get("pqc_migration")
-            if migration and migration["algorithm_id"] in pqc_distribution:
-                pqc_distribution[migration["algorithm_id"]] += 1
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            ip = None
+        qvs = info.get("qvs")
+        qvs = qvs if qvs is not None else 95
+        tag = "ELITEPQC" if qvs < 20 else ("STANDARD" if qvs < 80 else "LEGACY")
+        discovered_assets.append({
+            "host": host,
+            "ip": ip,
+            "pillars": ["Web/TLS"],
+            "pqc_ready": bool(info.get("pqc_ready", False)),
+            "details": {"tls_version": info.get("tls_version", "N/A")},
+            "qvs": qvs,
+            "qvs_evidence": "measured (triad scan)",
+            "tag": tag,
+            "tag_reason": f"QVS {qvs} from the Triad scan's own {info.get('tls_version', 'TLS')} handshake for this host",
+        })
+        seen_hosts.add(host)
 
-    return {
+    # Aggregate overall bank score across all discovered subdomains
+    qvs_scores = [a.get("qvs", 95) for a in discovered_assets if a.get("qvs") is not None]
+    overall_bank_qvs = round(sum(qvs_scores) / len(qvs_scores)) if qvs_scores else 95
+
+    tag_counts = {
+        "LEGACY": sum(1 for a in discovered_assets if a.get("tag") == "LEGACY"),
+        "STANDARD": sum(1 for a in discovered_assets if a.get("tag") == "STANDARD"),
+        "ELITEPQC": sum(1 for a in discovered_assets if a.get("tag") == "ELITEPQC")
+    }
+
+    _report(97, "Fetching mobile app inventory...")
+    result = {
         "base_domain": base_domain,
         "assets": discovered_assets,
         "total_found": len(discovered_assets),
+        "overall_bank_qvs": overall_bank_qvs,
+        "tag_counts": tag_counts,
         "axfr_success": len(axfr_results) > 0,
-        "overall_score": overall_score,
-        "pqc_distribution": pqc_distribution,
         "notes": (
             f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR/NS records. "
             f"{len(ct_results)} CT-log hosts (crt.sh + Cert Spotter). {len(dns_hint_results)} "
@@ -876,6 +833,8 @@ def discover_pnb_assets(target_base: str) -> dict:
         ),
         "mobile_apps": fetch_mobile_apps_for_discovery(base_domain)
     }
+    _report(100, "Discovery complete.")
+    return result
 
 def fetch_mobile_apps_for_discovery(domain: str) -> list:
     """Helper to find mobile apps relevant to the domain."""

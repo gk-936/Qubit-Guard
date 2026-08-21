@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from services.scanner_engine import _qvs
 
 
 def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url: str, discovered_assets: list = None, discovered_endpoints: list = None, discovered_mobile_apps: list = None) -> dict:
@@ -63,12 +64,38 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
         candidates = [f for f in findings if any(kw in f["issue"] for kw in algo_keywords)]
         severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         candidates.sort(key=lambda f: severity_rank.get(f["severity"], 5))
-        detected_algo = candidates[0]["issue"].split(":")[-1].strip() if candidates else "Unknown"
+        winner = candidates[0] if candidates else None
+        base_algo = winner["issue"].split(":")[-1].strip() if winner else "Unknown"
+        detected_algo = base_algo
 
-        # A target is NOT quantum safe if vulnerabilities were found OR if it resolved to classical cryptography
-        is_quantum_safe = not has_vulnerabilities
-        if any(classic_kw in detected_algo for classic_kw in ["Classical", "RSA", "ECC", "ECDHE", "ECDSA"]):
-            is_quantum_safe = False
+        # An "inferred" finding (e.g. archival's key-wrapping guess, extrapolated
+        # from the TLS key exchange the web pillar observed — a completely
+        # different asset, data-at-rest vs. a network handshake) is not the same
+        # kind of claim as a "measured" one. Collapsing both into a bare algorithm
+        # name here made archival storage read as if ECDHE were directly observed
+        # protecting data at rest, which isn't something a public endpoint scan
+        # can actually determine remotely. Only the DISPLAYED string gets this
+        # suffix — quantum-safety below is scored off base_algo so the added
+        # text can't accidentally change which QVS keywords match.
+        if winner and winner.get("evidence") == "inferred":
+            detected_algo = f"{base_algo} (inferred, not directly observed — {winner.get('inferred_from') or 'extrapolated from another pillar'})"
+
+        # A target is NOT quantum safe if vulnerabilities were found OR if it
+        # resolved to classical cryptography. Scored via the same _qvs() table
+        # used everywhere else in this project, not a separate hand-maintained
+        # keyword list — that list (checking for "ECDHE"/"RSA"/"ECC"/...)
+        # silently went stale the moment tls_kex_probe.py started reporting
+        # real measured group names like "x25519"/"secp256r1"/"X25519MLKEM768":
+        # none of those literal strings were in the list, so every TLS 1.3
+        # connection — classical AND hybrid-PQC alike — fell through to the
+        # default quantumSafe=True, the exact inverse of several of them.
+        # When no finding carried any algorithm evidence at all (base_algo
+        # stayed "Unknown"), that's absence of evidence, not evidence of
+        # safety — None marks "not assessed" rather than asserting either way.
+        if base_algo == "Unknown":
+            is_quantum_safe = None
+        else:
+            is_quantum_safe = not has_vulnerabilities and _qvs(base_algo) < 20
 
         # Extract TLS version from findings for a meaningful version label.
         # Findings with "TLS" in the detail or issue carry the negotiated version
@@ -108,17 +135,35 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
 
             pqc_ready = asset.get("pqc_ready", False)
             tls_v = asset.get("details", {}).get("tls_version", "TLSv1.2")
-            
+            # The actual negotiated cipher suite, when discovery measured one —
+            # this used to be hardcoded to "ML-DSA (PQC)" for every pqc_ready
+            # asset, which was wrong twice over: ML-DSA is a signature scheme
+            # (cert signing), not something a TLS key-exchange handshake would
+            # tell you, and Python's ssl module can't confirm a real post-quantum
+            # group was negotiated anyway — TLS 1.3 alone doesn't imply PQC.
+            # Report what was actually measured instead of guessing an algorithm.
+            cipher = asset.get("details", {}).get("cipher")
+            # TLS 1.3 cipher suite names never encode the key-exchange group
+            # (that's the whole reason tls_kex_probe.py exists) — two hosts can
+            # show the identical cipher string here while one is genuinely
+            # PQC-hybrid and the other classical. Without surfacing the measured
+            # group too, an ELITEPQC verdict next to an identical-looking
+            # LEGACY row for the same cipher name reads as an inconsistency
+            # instead of the two hosts actually having negotiated different
+            # key-exchange groups underneath that shared cipher suite.
+            kex_group = asset.get("details", {}).get("key_exchange_group")
+            crypto_label = f"{cipher} (key: {kex_group})" if cipher and kex_group else cipher
+
             # Use deterministic naming and types
             pillar_types = asset.get("pillars", ["Web/TLS"])
             main_pillar = pillar_types[0]
             comp_type = "application" if "Web" in main_pillar else "network-appliance" if "VPN" in main_pillar else "library"
-            
+
             components.append({
                 "type": comp_type,
                 "name": f"{main_pillar} ({host})",
                 "version": asset.get("details", {}).get("version", "unknown"),
-                "crypto": "ML-DSA (PQC)" if pqc_ready else f"Classical ({tls_v})",
+                "crypto": crypto_label or (f"TLS {tls_v} (cipher not captured)" if pqc_ready else f"Classical ({tls_v})"),
                 "quantumSafe": pqc_ready,
                 "properties": [
                     {"name": "quantum-shield:asset-type", "value": main_pillar},
@@ -138,10 +183,14 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
             bucket = ep.get("bucket", "General API")
             risk = ep.get("quantumRisk", "Classical")
             
-            # Map every unique active/protected path as a distinct manageable asset
+            # Map every unique active/protected path as a distinct manageable asset.
+            # Host is included in the name — the same path (e.g. "/health") can
+            # legitimately exist on multiple probed hosts (webUrl, apiUrl, and
+            # discovered subdomains), and without the host these looked like
+            # duplicate rows in the CBOM table even though they're distinct assets.
             components.append({
                 "type": "library",
-                "name": f"API Endpoint: {bucket} ({endpoint_path})",
+                "name": f"API Endpoint: {bucket} ({host}{endpoint_path})",
                 "version": "v1",
                 "crypto": risk,
                 "quantumSafe": "PQC" in risk,

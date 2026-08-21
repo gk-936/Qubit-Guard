@@ -59,7 +59,7 @@ def _probe_single(host: str, path: str, is_api_sub: bool) -> dict:
             url, method="HEAD",
             headers={"User-Agent": "QuantumShield-Scanner/2.0", "Accept": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             if resp.status < 500:
                 return {
                     "url": url,
@@ -87,15 +87,28 @@ def _get_tls_risk(host: str) -> str:
     """Get quantum risk label from a TLS handshake."""
     try:
         context = ssl.create_default_context()
-        with socket.create_connection((host, 443), timeout=3) as sock:
+        with socket.create_connection((host, 443), timeout=1.5) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 cipher = tls_sock.cipher()
                 cipher_name = cipher[0] if cipher else ""
+                tls_version = tls_sock.version()
 
-                if "MLKEM" in cipher_name.upper() or "KYBER" in cipher_name.upper():
-                    return "PQC-Ready"
-                elif "TLS_AES" in cipher_name:
-                    return "Classical (TLS 1.3)"
+                if "TLS_AES" in cipher_name or tls_version == "TLSv1.3":
+                    # A TLS 1.3 cipher suite name (e.g. TLS_AES_128_GCM_SHA256)
+                    # only names the symmetric cipher/hash — it does not encode
+                    # which key-exchange group was negotiated (classical X25519
+                    # vs. a PQC/hybrid group). Python's ssl module doesn't expose
+                    # that group either, but it IS observable on the wire — a
+                    # second raw-socket probe (tls_kex_probe.py) reads it
+                    # straight off the cleartext ServerHello/HelloRetryRequest.
+                    try:
+                        from services.tls_kex_probe import probe_key_exchange
+                        kex = probe_key_exchange(host)
+                        if kex["reachable"] and kex["group"]:
+                            return f"PQC-Ready ({kex['group']})" if kex["is_pqc_hybrid"] else f"High ({kex['group']})"
+                    except Exception as e:
+                        log.debug("TLS 1.3 key-exchange probe failed for %s: %s", host, e)
+                    return "TLS 1.3 (key exchange not observed)"
                 elif "ECDHE" in cipher_name:
                     return "High (ECDHE)"
                 elif "RSA" in cipher_name:

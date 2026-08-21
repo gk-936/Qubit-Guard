@@ -62,6 +62,10 @@ export const checkHealth = () => api.get('/health');
 // Only this call gets the longer timeout so a genuinely broken/hanging
 // endpoint elsewhere still fails fast for the user.
 export const runTriadScan = (data) => api.post('/scan/triad', data, { timeout: 180000 });
+export const startTriadScan = (data) => api.post('/scan/triad/start', data);
+export const getScanProgress = (jobId) => api.get(`/scan/progress/${jobId}`);
+export const startDiscovery = (data) => api.post('/discovery/start', data);
+export const getDiscoveryProgress = (jobId) => api.get(`/discovery/progress/${jobId}`);
 export const getScanHistory = () => api.get('/scan/history');
 export const getScanById = (id) => api.get(`/scan/${id}`);
 
