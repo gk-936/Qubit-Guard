@@ -99,7 +99,8 @@ const Home = () => {
               onKeyPress={(e) => e.key === 'Enter' && handleStartAudit()}
               style={{
                 width: '100%',
-                padding: '18px 24px',
+                boxSizing: 'border-box',
+                padding: '18px 150px 18px 24px',
                 borderRadius: '50px',
                 border: error ? '2px solid var(--pnb-red)' : '2px solid #D4A01744',
                 fontSize: '16px',
@@ -112,7 +113,7 @@ const Home = () => {
             />
             {error && (
               <div style={{ color: 'var(--pnb-red)', fontSize: '13px', marginTop: '12px', fontWeight: 600, textAlign: 'left', paddingLeft: '20px' }}>
-                ⚠️ {error}
+                {error}
               </div>
             )}
             <button
@@ -121,7 +122,8 @@ const Home = () => {
                 position: 'absolute',
                 right: '8px',
                 top: '8px',
-                padding: '12px 28px',
+                bottom: '8px',
+                padding: '0 24px',
                 borderRadius: '40px',
                 background: 'var(--pnb-red)',
                 color: 'white',
@@ -153,9 +155,9 @@ const Home = () => {
           )}
 
           <div className="grid-3" style={{ marginTop: '50px', opacity: 0.6 }}>
-            <div style={{ fontSize: '11px' }}>🛡️ Global Compliance Standards</div>
-            <div style={{ fontSize: '11px' }}>🔒 Multi-Pillar PQC Scan</div>
-            <div style={{ fontSize: '11px' }}>📊 CBOM CycloneDX 1.5</div>
+            <div style={{ fontSize: '11px' }}>Global Compliance Standards</div>
+            <div style={{ fontSize: '11px' }}>Multi-Pillar PQC Scan</div>
+            <div style={{ fontSize: '11px' }}>CBOM CycloneDX 1.5</div>
           </div>
         </div>
       </div>
@@ -174,13 +176,13 @@ const Home = () => {
         </div>
         {activeScanMetadata && (
           <div style={{ padding: '8px 14px', background: 'rgba(255, 255, 255, 0.95)', border: '2px solid var(--pnb-gold)', borderRadius: '6px', fontSize: '12px', color: 'var(--pnb-red)', fontWeight: 800, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
-            🛰️ AUDITING: {activeScanMetadata.target}
+            AUDITING: {activeScanMetadata.target}
           </div>
         )}
       </div>
       <div className="home-summary-grid">
         <div className="home-summary-card" onClick={() => navigate('/discovery')} style={{ cursor: 'pointer' }}>
-          <span className="hsc-icon">🔍</span>
+          <span className="hsc-icon"></span>
           <div>
             <div className="hsc-val">{data.summary.assetsDiscovery.value}</div>
             <div className="hsc-lbl">{data.summary.assetsDiscovery.label}</div>
@@ -188,7 +190,7 @@ const Home = () => {
           </div>
         </div>
         <div className="home-summary-card" onClick={() => navigate('/rating')} style={{ cursor: 'pointer', borderLeftColor: '#1A6BAA' }}>
-          <span className="hsc-icon">🛡️</span>
+          <span className="hsc-icon"></span>
           <div>
             <div className="hsc-val" style={{ color: '#1A6BAA' }}>{data.summary.cyberRating.value}</div>
             <div className="hsc-lbl">{data.summary.cyberRating.label}</div>
@@ -196,7 +198,7 @@ const Home = () => {
           </div>
         </div>
         <div className="home-summary-card" onClick={() => navigate('/posture')} style={{ cursor: 'pointer', borderLeftColor: '#1A8A1A' }}>
-          <span className="hsc-icon">📋</span>
+          <span className="hsc-icon"></span>
           <div>
             <div className="hsc-val" style={{ color: '#1A8A1A' }}>{data.summary.sslCerts.value}</div>
             <div className="hsc-lbl">{data.summary.sslCerts.label}</div>
@@ -204,7 +206,7 @@ const Home = () => {
           </div>
         </div>
         <div className="home-summary-card" onClick={() => navigate('/cbom')} style={{ cursor: 'pointer', borderLeftColor: '#C0272D' }}>
-          <span className="hsc-icon">⚠️</span>
+          <span className="hsc-icon"></span>
           <div>
             <div className="hsc-val" style={{ color: '#C0272D' }}>{data.summary.cbomVulnerabilities.value}</div>
             <div className="hsc-lbl">{data.summary.cbomVulnerabilities.label}</div>
@@ -215,7 +217,7 @@ const Home = () => {
       <div className="home-detail-grid">
         <div>
           <div className="card">
-            <div className="card-title"><span className="ct-icon">📊</span>Assets Inventory</div>
+            <div className="card-title">Assets Inventory</div>
             <div className="grid-2" style={{ gap: '10px', marginBottom: '10px' }}>
               <div className="stat-chip"><div className="sc-val">{data.inventory.ssl.toLocaleString()}</div><div className="sc-lbl">SSL Certificates</div></div>
               <div className="stat-chip"><div className="sc-val">{data.inventory.software.toLocaleString()}</div><div className="sc-lbl">Software</div></div>
@@ -237,7 +239,7 @@ const Home = () => {
             </div>
           </div>
           <div className="card">
-            <div className="card-title"><span className="ct-icon">🎯</span>Posture of PQC</div>
+            <div className="card-title">Posture of PQC</div>
             <div style={{ marginBottom: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}><span>ML-KEM Adoption</span><span style={{ fontWeight: 700, color: 'var(--pnb-gold)' }}>{data.posture.mlKemAdoption == null ? 'N/A' : `${data.posture.mlKemAdoption}%`}</span></div>
               <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: `${data.posture.mlKemAdoption ?? 0}%` }}></div></div>
@@ -254,7 +256,7 @@ const Home = () => {
         </div>
         <div>
           <div className="card">
-            <div className="card-title"><span className="ct-icon">⭐</span>Vulnerability Severity Distribution</div>
+            <div className="card-title">Vulnerability Severity Distribution</div>
             <div style={{ height: '180px' }}>
               <Bar
                 data={{
@@ -278,7 +280,7 @@ const Home = () => {
             </div>
           </div>
           <div className="card">
-            <div className="card-title"><span className="ct-icon">📋</span>CBOM Quick Overview</div>
+            <div className="card-title">CBOM Quick Overview</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <div style={{ flex: 1, height: '130px' }}>
                 <Doughnut

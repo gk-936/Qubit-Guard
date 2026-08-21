@@ -1,11 +1,32 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useScan } from '../context/ScanContext';
 
-const Header = ({ title, onLogout }) => {
+const Header = ({ title, sidebarOpen, onToggleSidebar, showLastScan }) => {
   const { activeScanMetadata, isHistoryMode, switchScan } = useScan();
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <div id="topbar">
-      <div className="tb-page-title">{title}</div>
+      <div className={`tb-left ${sidebarOpen ? 'shifted' : ''}`}>
+        <button
+          type="button"
+          className={`sidebar-toggle ${sidebarOpen ? 'open' : ''}`}
+          aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={sidebarOpen}
+          onClick={onToggleSidebar}
+        >
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+        <div className="tb-page-title">{title}</div>
+      </div>
+
       <div className="tb-logo">
         <svg className="tb-logo-shield" viewBox="0 0 60 70" fill="none">
           <path d="M30 4L56 14V36C56 52 44 63 30 68C16 63 4 52 4 36V14L30 4Z" fill="url(#ts)" stroke="#D4A017" strokeWidth="1.5" />
@@ -14,15 +35,17 @@ const Header = ({ title, onLogout }) => {
           <text x="30" y="52" fontFamily="sans-serif" fontSize="5" fill="rgba(255,255,255,0.7)" textAnchor="middle">PQC-Ready</text>
         </svg>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-        {isHistoryMode && activeScanMetadata && (
+
+      <div className="tb-right">
+        {showLastScan && isHistoryMode && activeScanMetadata && (
           <div className="history-banner" onClick={() => switchScan('')}>
-            <span style={{ fontSize: '12px' }}>📅 VIEWING SCAN: <strong>{new Date(activeScanMetadata.timestamp).toLocaleDateString()}</strong></span>
-            <span className="close-banner">✖</span>
+            <span style={{ fontSize: '12px' }}>Last Scan: <strong>{new Date(activeScanMetadata.timestamp).toLocaleDateString()}</strong></span>
+            <span className="close-banner">&times;</span>
           </div>
         )}
-        <div className="tb-welcome">User: <span>admin</span></div>
-        <button onClick={onLogout} className="btn btn-outline btn-sm" style={{ borderColor: 'rgba(255,255,255,0.3)', color: 'white', padding: '4px 8px' }}>Logout</button>
+        <div className="tb-datetime">
+          {now.toLocaleDateString('en-GB')} &middot; {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </div>
       </div>
 
       <style>{`

@@ -155,11 +155,11 @@ const TriadScanner = () => {
   };
 
   const pillarMeta = {
-    web: { tag: 'WEB PILLAR', title: 'TLS Certificate Engine', subtitle: 'Web Server Cryptanalysis', class: 'pillar-a', icon: '🌐' },
-    vpn: { tag: 'VPN PILLAR', title: 'VPN/TLS Gateway Engine', subtitle: 'Gateway Protocol Analysis', class: 'pillar-b', icon: '🔒' },
-    api: { tag: 'API PILLAR', title: 'API Security Engine', subtitle: 'JWT & mTLS Analysis', class: 'pillar-c', icon: '⚡' },
-    firmware: { tag: 'FIRMWARE PILLAR', title: 'Firmware Integrity Engine', subtitle: 'XMSS/LMS Signing Analysis', class: 'pillar-d', icon: '🔧' },
-    archival: { tag: 'ARCHIVAL PILLAR', title: 'Archival Encryption Engine', subtitle: 'BIKE/HQC KEM Analysis', class: 'pillar-e', icon: '🗄️' },
+    web: { tag: 'WEB PILLAR', title: 'TLS Certificate Engine', subtitle: 'Web Server Cryptanalysis', class: 'pillar-a' },
+    vpn: { tag: 'VPN PILLAR', title: 'VPN/TLS Gateway Engine', subtitle: 'Gateway Protocol Analysis', class: 'pillar-b' },
+    api: { tag: 'API PILLAR', title: 'API Security Engine', subtitle: 'JWT & mTLS Analysis', class: 'pillar-c' },
+    firmware: { tag: 'FIRMWARE PILLAR', title: 'Firmware Integrity Engine', subtitle: 'XMSS/LMS Signing Analysis', class: 'pillar-d' },
+    archival: { tag: 'ARCHIVAL PILLAR', title: 'Archival Encryption Engine', subtitle: 'BIKE/HQC KEM Analysis', class: 'pillar-e' },
   };
 
   // A null score means the pillar could not be probed — it is "not assessed",
@@ -188,7 +188,7 @@ const TriadScanner = () => {
 
       {/* ── Input Area ───────────────────────────────────────────────── */}
       <div className="scan-input-area">
-        <div className="card-title"><span className="ct-icon">⚡</span>Triad Scanner — Define Attack Surface</div>
+        <div className="card-title">Triad Scanner — Define Attack Surface</div>
         <div className="scan-row">
           <span className="scan-badge sb-web">WEB/TLS</span>
           <input type="text" id="scan-web" value={webTarget} onChange={(e) => setWebTarget(e.target.value)} className="form-input" style={{ flex: 1, fontFamily: 'var(--mono)' }} />
@@ -208,14 +208,14 @@ const TriadScanner = () => {
           <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
             <span>⬡ API PILLAR — Paste a sample JWT or OAuth Bearer Token for signing-algorithm analysis</span>
             <button className="btn-pqc-text" style={{ fontSize: '10px', color: 'var(--pnb-red)', fontWeight: 700, cursor: 'pointer', background: 'none', border: 'none' }} onClick={handleTokenAnalysis} disabled={analyzingToken}>
-              {analyzingToken ? '⏳ ANALYZING...' : '🔍 ANALYZE TOKEN'}
+              {analyzingToken ? 'ANALYZING...' : 'ANALYZE TOKEN'}
             </button>
           </div>
           <textarea id="jwt-token-sandbox" value={jwtToken} onChange={(e) => setJwtToken(e.target.value)} className="form-input" style={{ width: '100%', height: '60px', fontFamily: 'var(--mono)', color: '#1A8A1A', background: '#F8FFF8' }}></textarea>
           
           {tokenAnalysis && (
             <div style={{ marginTop: '10px', padding: '12px', background: '#f9f9f9', borderRadius: '8px', borderLeft: '3px solid #C0272D', fontSize: '11px', whiteSpace: 'pre-wrap', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.05)' }}>
-              <div style={{ fontWeight: 700, marginBottom: '4px', color: '#C0272D', fontSize: '10px', letterSpacing: '1px' }}>🛡️ PQC ARCHITECT ANALYSIS:</div>
+              <div style={{ fontWeight: 700, marginBottom: '4px', color: '#C0272D', fontSize: '10px', letterSpacing: '1px' }}>PQC ARCHITECT ANALYSIS:</div>
               {tokenAnalysis}
             </div>
           )}
@@ -227,7 +227,7 @@ const TriadScanner = () => {
           onClick={runTriadScan}
           disabled={isScanning}
         >
-          {isScanning ? '⏳ SCANNING...' : '⚡ INITIATE TRIAD SCAN'}
+          {isScanning ? 'SCANNING...' : 'INITIATE TRIAD SCAN'}
         </button>
       </div>
 
@@ -294,7 +294,7 @@ const TriadScanner = () => {
               const meta = pillarMeta[pillar];
               return (
                 <div key={pillar} className={`pillar-card ${meta.class}`}>
-                  <div className="pc-tag">{meta.icon} {meta.tag}</div>
+                  <div className="pc-tag">{meta.tag}</div>
                   <div className="pc-title">{meta.title}</div>
                   <div style={{ fontSize: '10px', opacity: 0.7, marginBottom: '10px', fontFamily: 'var(--mono)' }}>{meta.subtitle}</div>
                   <div style={{ fontSize: '10px', opacity: 0.8, marginBottom: '6px', fontFamily: 'var(--mono)', letterSpacing: '1px' }}>QVS: {qvsText(riskScores[pillar])}{isScored(riskScores[pillar]) ? '/100' : ''}</div>
@@ -304,7 +304,7 @@ const TriadScanner = () => {
                         <div className={`pf-sev sev-${f.severity === 'critical' || f.severity === 'high' ? 'danger' : f.severity === 'info' ? 'safe' : 'warn'}`}></div>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: '11px', marginBottom: '4px', fontWeight: f.severity === 'critical' ? 700 : 500, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span>{f.severity === 'critical' ? '🚨' : f.severity === 'high' ? '⚠' : f.severity === 'info' ? 'ℹ' : '⚠'} {f.issue}</span>
+                            <span>{f.issue}</span>
                             {f.raw?.key_type && (
                               <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '4px', background: f.severity === 'critical' ? '#fee2e2' : '#e0f2fe', color: f.severity === 'critical' ? '#991b1b' : '#0369a1', fontFamily: 'var(--mono)', fontWeight: 700 }}>
                                 Tag: {f.raw.auth_algo === 'ML-DSA' || f.raw.key_exchange?.includes('MLKEM') ? 'ELITEPQC' : (f.raw.tls_version === 'TLSv1.3' ? 'STANDARD' : 'LEGACY')}
@@ -350,7 +350,7 @@ const TriadScanner = () => {
                           className="btn-pqc-innovation" 
                           onClick={() => navigate('/owasp-audit', { state: { findings, url: webTarget, riskScores } })}
                         >
-                          <span className="innovation-icon">🛡️</span>
+                          <span className="innovation-icon"></span>
                           <div style={{ textAlign: 'left' }}>
                             <div className="innovation-label">KEY INNOVATION</div>
                             <div className="innovation-title">AUDIT OWASP COMPLIANCE (2025)</div>
@@ -367,7 +367,7 @@ const TriadScanner = () => {
           {/* ── CBOM Preview ─────────────────────────────────────────── */}
           {cbom && (
             <div className="card" style={{ borderLeft: '4px solid var(--pnb-gold)' }}>
-              <div className="card-title" style={{ fontSize: '13px' }}><span className="ct-icon">📦</span> Unified CBOM (CycloneDX v1.5)</div>
+              <div className="card-title" style={{ fontSize: '13px' }}>Unified CBOM (CycloneDX v1.5)</div>
               <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: '10px', fontFamily: 'var(--mono)' }}>
                 Serial: {cbom.serialNumber} | Spec: {cbom.specVersion}
               </div>
@@ -386,7 +386,7 @@ const TriadScanner = () => {
                       <td><span className={`risk-badge ${c.type === 'application' ? 'rb-high' : c.type === 'network-appliance' ? 'rb-medium' : 'rb-critical'}`}>{c.type}</span></td>
                       <td style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{c.name}</td>
                       <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#C0272D', fontWeight: 600 }}>{c.crypto}</td>
-                      <td>{c.quantumSafe ? <span className="pqc-yes">✅</span> : <span className="pqc-no">❌</span>}</td>
+                      <td>{c.quantumSafe ? <span className="pqc-yes">Yes</span> : <span className="pqc-no">No</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -397,7 +397,7 @@ const TriadScanner = () => {
           {/* ── Triad-Specific Remediation ───────────────────────────── */}
           {remediation.length > 0 && (
             <div className="card">
-              <div className="card-title" style={{ fontSize: '13px' }}><span className="ct-icon">🔧</span> Triad-Specific Auto-Remediation</div>
+              <div className="card-title" style={{ fontSize: '13px' }}>Triad-Specific Auto-Remediation</div>
               <div className="remed-grid">
                 {remediation.map((r, i) => (
                   <RemediationCard key={i} data={r} />

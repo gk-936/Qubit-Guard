@@ -70,12 +70,12 @@ const Remediation = () => {
             Auto-Remediation Playbooks
             {activeScanMetadata && (
               <span style={{ marginLeft: '12px', fontSize: '11px', color: 'var(--pnb-gold)', fontWeight: 700 }}>
-                 🛰️ AUDITING: {activeScanMetadata.target}
+                 AUDITING: {activeScanMetadata.target}
               </span>
             )}
           </div>
           <button className="btn btn-gold btn-sm" onClick={loadFixes} disabled={isLoading}>
-            {isLoading ? 'Loading...' : '⚡ Reload Playbooks'}
+            {isLoading ? 'Loading...' : 'Reload Playbooks'}
           </button>
         </div>
         <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
@@ -83,7 +83,7 @@ const Remediation = () => {
         </p>
 
         {isLoading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ LOADING REMEDIATION PLAYBOOKS...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>LOADING REMEDIATION PLAYBOOKS...</div>
         ) : (
             <div className="remed-accordion">
             {remediations.map((r, i) => (
@@ -126,8 +126,8 @@ const Remediation = () => {
         {/* AI Expert Chat Section */}
         <div style={{ marginTop: '30px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div className="card-title" style={{ fontSize: '15px' }}>💬 Qubit-Guard AI Expert Chat</div>
-              <div style={{ fontSize: '10px', color: '#888', fontStyle: 'italic', background: 'linear-gradient(90deg, #FF9933, #FFFFFF, #138808)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontWeight: 700, letterSpacing: '0.5px' }}>Powered by Sarvam AI 🇮🇳</div>
+              <div className="card-title" style={{ fontSize: '15px' }}>Qubit-Guard AI Expert Chat</div>
+              <div style={{ fontSize: '10px', color: '#888', fontStyle: 'italic', background: 'linear-gradient(90deg, #FF9933, #FFFFFF, #138808)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontWeight: 700, letterSpacing: '0.5px' }}>Powered by Sarvam AI </div>
             </div>
             <div className="chat-container" style={{ background: '#f9f9f9', borderRadius: '8px', padding: '15px', height: '300px', overflowY: 'auto', marginBottom: '15px', border: '1px solid #eee' }}>
                 {messages.map((m, i) => (
@@ -147,7 +147,7 @@ const Remediation = () => {
                         </div>
                     </div>
                 ))}
-                {isChatting && <div style={{ fontSize: '11px', color: '#888' }}>⚡ Sarvam AI Expert is thinking...</div>}
+                {isChatting && <div style={{ fontSize: '11px', color: '#888' }}>Sarvam AI Expert is thinking...</div>}
                 <div ref={chatEndRef} />
             </div>
             <form onSubmit={handleChat} style={{ display: 'flex', gap: '10px' }}>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Search } from 'lucide-react';
 import { searchMobileApps, scanMobileApp as apiScanApp } from '../api';
 import { useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
@@ -74,17 +75,17 @@ const MobileScanner = () => {
   return (
     <div id="page-mobile" className="page-view">
       <div className="card">
-        <div className="card-title"><span className="ct-icon">📱</span>Universal Mobile App Presence Auditor</div>
+        <div className="card-title">Universal Mobile App Presence Auditor</div>
         <p style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>Searching for official mobile applications and analyzing their cryptographic compliance gateways.</p>
         
         <div className="search-bar">
-          <span className="search-icon">🔍</span>
+          <span className="search-icon"><Search size={16} /></span>
           <input type="text" placeholder="Search for Bank Apps (e.g. SBI, HDFC)..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
           <button className="btn btn-gold btn-sm" onClick={() => searchApps()}>Refresh Search</button>
         </div>
 
         {isSearching ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>⚡ SEARCHING APP STORES...</div>
+          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>SEARCHING APP STORES...</div>
         ) : (
           <table className="data-table">
             <thead>
@@ -105,7 +106,7 @@ const MobileScanner = () => {
                     {app.name}
                     {app.source === 'derived-from-ios' && (
                       <div style={{ fontSize: '10px', fontWeight: 500, color: '#a66a00' }} title={app.note}>
-                        ⚠ inferred from iOS listing — not independently verified
+                        inferred from iOS listing — not independently verified
                       </div>
                     )}
                   </td>
@@ -123,7 +124,7 @@ const MobileScanner = () => {
                     {app.developer || 'Unknown'}
                   </td>
                   <td style={{ color: app.platform === 'Android' ? '#A4C639' : '#555' }}>
-                    {app.platform === 'Android' ? '🤖 Android' : '🍏 iOS'}
+                    {app.platform === 'Android' ? 'Android' : 'iOS'}
                   </td>
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{app.id}</td>
                   <td>
@@ -139,7 +140,7 @@ const MobileScanner = () => {
                       <span style={{ color: '#888' }}>No ratings yet</span>
                     ) : (
                       <>
-                        ⭐ {app.rating.toFixed(2)}
+                        {app.rating.toFixed(2)}
                         <div style={{ fontSize: '10px', fontWeight: 500, color: '#888' }}>
                           from {app.rating_count?.toLocaleString() || 0} rating{app.rating_count === 1 ? '' : 's'}
                         </div>
@@ -147,7 +148,7 @@ const MobileScanner = () => {
                     )}
                   </td>
                   <td>
-                    <button className="btn btn-gold btn-sm" onClick={() => runMobileScan(app)}>⚡ Scan App</button>
+                    <button className="btn btn-gold btn-sm" onClick={() => runMobileScan(app)}>Scan App</button>
                   </td>
                 </tr>
               ))}
@@ -164,7 +165,7 @@ const MobileScanner = () => {
           
           {isScanning ? (
             <div style={{ textAlign: 'center', padding: '30px' }}>
-              <div style={{ fontSize: '13px', color: 'var(--pnb-red)', marginBottom: '10px' }}>⏳ PERFORMING CRYPTOGRAPHIC ANALYSIS ON ENDPOINTS...</div>
+              <div style={{ fontSize: '13px', color: 'var(--pnb-red)', marginBottom: '10px' }}>PERFORMING CRYPTOGRAPHIC ANALYSIS ON ENDPOINTS...</div>
               <div className="prog-bar"><div className="prog-fill pf-gold" style={{ width: '60%', transition: 'width 2s' }}></div></div>
             </div>
           ) : scanResult && (
@@ -179,7 +180,7 @@ const MobileScanner = () => {
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <div className={`pf-sev sev-${f.severity === 'high' || f.severity === 'critical' ? 'danger' : f.severity === 'info' ? 'safe' : 'warn'}`}></div>
                       <div>
-                        <div style={{ fontWeight: 700, fontSize: '12px' }}>{f.severity === 'info' ? 'ℹ' : '⚠'} {f.issue}</div>
+                        <div style={{ fontWeight: 700, fontSize: '12px' }}>{f.issue}</div>
                         <div style={{ fontSize: '11px', color: '#444', fontWeight: 500, margin: '2px 0' }}>{f.detail}</div>
                         {f.recommendation && (
                           <div style={{ fontSize: '10px', color: '#666', fontStyle: 'italic', background: '#f9f9f9', padding: '4px', borderRadius: '4px', borderLeft: '2px solid #ccc', marginTop: '4px' }}>

@@ -145,7 +145,7 @@ const Inventory = () => {
             <button className="btn btn-outline btn-sm" onClick={handleScanAll} disabled={scanning}>{scanning ? 'Scanning...' : 'Scan All ▶'}</button>
             <input 
                type="text" 
-               placeholder="🔍 Search Inventory..." 
+               placeholder="Search Inventory..." 
                value={searchTerm}
                onChange={(e) => setSearchTerm(e.target.value)}
                style={{ padding: '6px 12px', border: '1px solid #ddd', borderRadius: '20px', fontSize: '12px', outline: 'none', width: '180px' }} 
@@ -264,7 +264,7 @@ const Inventory = () => {
                       <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                         {['HSTS', 'CSP', 'X-Frame-Options'].map(h => (
                           <span key={h} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '10px', background: selectedAsset.security_audit[h] ? '#e6f4ea' : '#fce8e6', color: selectedAsset.security_audit[h] ? '#1e7e34' : '#c5221f', border: '1px solid currentColor' }}>
-                            {h}: {selectedAsset.security_audit[h] ? '✅' : '❌'}
+                            {h}: {selectedAsset.security_audit[h] ? 'Pass' : 'Fail'}
                           </span>
                         ))}
                       </div>
@@ -347,7 +347,7 @@ const Inventory = () => {
                   onChange={e => setNewAsset({...newAsset, quantum_safe: e.target.checked})}
                 /> Quantum-Safe Algorithm (PQC)
               </label>
-              <button type="submit" className="btn btn-gold" style={{ marginTop: '10px' }}>💾 Save to Database</button>
+              <button type="submit" className="btn btn-gold" style={{ marginTop: '10px' }}>Save to Database</button>
             </form>
           </div>
         </div>

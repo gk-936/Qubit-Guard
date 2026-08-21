@@ -70,7 +70,7 @@ const QDaySimulator = () => {
   return (
     <div id="page-qday" className="page-view">
       <div className="card" style={{ borderTop: '4px solid #C0272D' }}>
-        <div className="card-title" style={{ color: '#C0272D', marginBottom: '24px' }}>☢️ HNDL Threat Simulator & Exposure Model</div>
+        <div className="card-title" style={{ color: '#C0272D', marginBottom: '24px' }}>HNDL Threat Simulator & Exposure Model</div>
         <div style={{ display: 'flex', gap: '20px', marginBottom: '30px', flexWrap: 'wrap' }}>
             <div className="stat-chip danger" style={{ flex: 1, minWidth: '200px' }}>
                 <div className="sc-val" style={{ color: '#C0272D' }}>
@@ -98,7 +98,7 @@ const QDaySimulator = () => {
               boxShadow: '0 2px 8px rgba(100,30,0,0.08)'
             }}>
               <div className="phase-tag" style={{ color: '#C8860A', fontSize: '11px', fontWeight: '700', letterSpacing: '2px', marginBottom: '8px', textTransform: 'uppercase', fontFamily: 'var(--mono)' }}>PHASE 01 — PRESENT DAY</div>
-              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>📊 Data Harvesting (Eavesdropping)</div>
+              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>Data Harvesting (Eavesdropping)</div>
               <div className="phase-desc" style={{ color: '#7A5A30', marginBottom: '12px', fontSize: '13px' }}>Intercepting and storing {vulnCount.toLocaleString()} RSA/ECC encrypted sessions.</div>
               <div className="phase-prog-wrap" style={{ height: '6px', background: '#E8D9C4', borderRadius: '3px', overflow: 'hidden', marginTop: '12px' }}><div className="phase-prog-fill" style={{ width: `${progress.harvest}%`, height: '100%', background: '#C8860A', boxShadow: '0 0 8px rgba(200,134,10,0.4)', transition: 'width 0.2s ease' }}></div></div>
               <div style={{ fontSize: '11px', color: '#C8860A', marginTop: '8px', textAlign: 'right', fontWeight: '600' }}>{progress.harvest}%</div>
@@ -111,7 +111,7 @@ const QDaySimulator = () => {
               boxShadow: '0 2px 8px rgba(192,39,45,0.08)'
             }}>
               <div className="phase-tag" style={{ color: '#C0272D', fontSize: '11px', fontWeight: '700', letterSpacing: '2px', marginBottom: '8px', textTransform: 'uppercase', fontFamily: 'var(--mono)' }}>PHASE 02 — THE "Q-DAY" EVENT</div>
-              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>⚡ Quantum Realization (CRQC)</div>
+              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>Quantum Realization (CRQC)</div>
               <div className="phase-desc" style={{ color: '#7A5A30', marginBottom: '12px', fontSize: '13px' }}>Quantum hardware achieves ~20M physical qubits (Shor's Algorithm execution).</div>
               <div className="phase-prog-wrap" style={{ height: '6px', background: '#EDD5D7', borderRadius: '3px', overflow: 'hidden', marginTop: '12px' }}><div className="phase-prog-fill" style={{ width: `${progress.qday}%`, height: '100%', background: '#C0272D', boxShadow: '0 0 8px rgba(192,39,45,0.4)', transition: 'width 0.2s ease' }}></div></div>
               <div style={{ fontSize: '11px', color: '#C0272D', marginTop: '8px', textAlign: 'right', fontWeight: '600' }}>{progress.qday}%</div>
@@ -123,7 +123,7 @@ const QDaySimulator = () => {
               transition: 'all 0.3s ease', boxShadow: '0 2px 8px rgba(107,77,156,0.08)'
             }}>
               <div className="phase-tag" style={{ color: '#6B4D9C', fontSize: '11px', fontWeight: '700', letterSpacing: '2px', marginBottom: '8px', textTransform: 'uppercase', fontFamily: 'var(--mono)' }}>PHASE 03 — POST-QUANTUM ERA</div>
-              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>🔓 Retroactive Decryption</div>
+              <div className="phase-title" style={{ color: '#2C1A00', fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>Retroactive Decryption</div>
               <div className="phase-desc" style={{ color: '#7A5A30', marginBottom: '12px', fontSize: '13px' }}>Historical banking records, PII, and trade secrets are exposed in approximately 0.4 seconds per key.</div>
               <div className="phase-prog-wrap" style={{ height: '6px', background: '#E4DCED', borderRadius: '3px', overflow: 'hidden', marginTop: '12px' }}><div className="phase-prog-fill" style={{ width: `${progress.decrypt}%`, height: '100%', background: '#6B4D9C', boxShadow: '0 0 8px rgba(107,77,156,0.4)', transition: 'width 0.2s ease' }}></div></div>
               <div style={{ fontSize: '11px', color: '#6B4D9C', marginTop: '8px', textAlign: 'right', fontWeight: '600' }}>{progress.decrypt}%</div>
@@ -131,7 +131,7 @@ const QDaySimulator = () => {
           </div>
 
           <div className="card" style={{ margin: 0, background: 'linear-gradient(135deg, #FFF9F9 0%, #FFF3F3 100%)', borderLeft: '5px solid #C0272D' }}>
-            <div className="card-title" style={{ fontSize: '14px', color: '#C0272D' }}>🧠 Simulator Guide</div>
+            <div className="card-title" style={{ fontSize: '14px', color: '#C0272D' }}>Simulator Guide</div>
             <div style={{ fontSize: '12px', lineHeight: '1.7', color: '#2C1A00' }}>
               <div style={{ marginBottom: '14px', padding: '12px', background: 'rgba(192, 39, 45, 0.05)', borderRadius: '8px', borderLeft: '3px solid #C0272D' }}>
                 <b style={{ color: '#C0272D' }}>⬡ What is HNDL?</b>
@@ -151,10 +151,10 @@ const QDaySimulator = () => {
 
         <div style={{ textAlign: 'center', marginTop: '35px' }}>
           <button className="btn btn-red" onClick={startSimulation} disabled={status === 'Active'} style={{ padding: '13px 40px', fontSize: '14px', fontWeight: '600', letterSpacing: '1px', opacity: status === 'Active' ? 0.6 : 1, cursor: status === 'Active' ? 'not-allowed' : 'pointer' }}>
-            {status === 'Active' ? '☣️ SIMULATING ATTACK...' : '💥 RUN HNDL ATTACK SIMULATION'}
+            {status === 'Active' ? 'SIMULATING ATTACK...' : 'RUN HNDL ATTACK SIMULATION'}
           </button>
           <div style={{ marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '12px', color: status === 'Active' ? '#C0272D' : (status.includes('Complete') ? '#1A8A1A' : '#7A5A30'), letterSpacing: '2px', fontWeight: '600', textTransform: 'uppercase' }}>
-            ⚙️ {status}
+            {status}
           </div>
         </div>
 
@@ -163,7 +163,7 @@ const QDaySimulator = () => {
           <div style={{ marginTop: '40px', animation: 'fadeUp 0.5s ease' }}>
             <div style={{ background: 'rgba(192, 39, 45, 0.05)', border: '2px dashed #C0272D', borderRadius: '12px', padding: '24px' }}>
               <div style={{ color: '#C0272D', fontWeight: '700', fontSize: '18px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                💀 Post-Exposure Impact Report
+                Post-Exposure Impact Report
               </div>
               <div className="grid-2">
                  <div style={{ background: 'white', padding: '16px', borderRadius: '8px', border: '1px solid #eee' }}>
@@ -186,7 +186,7 @@ const QDaySimulator = () => {
                 style={{ width: '100%', marginTop: '20px' }}
                 onClick={() => navigate('/triad')}
               >
-                ⚡ Harden My Infrastructure Now
+                Harden My Infrastructure Now
               </button>
             </div>
           </div>

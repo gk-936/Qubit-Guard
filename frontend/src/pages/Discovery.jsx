@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api, { startDiscovery, getDiscoveryProgress } from '../api';
 import { useNavigate } from 'react-router-dom';
-import { Network, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Network, Search, ShieldAlert, ShieldCheck, Maximize2, Minimize2 } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
 
 const TAG_COLOR = { Legacy: '#C0272D', Standard: '#D47800', ElitePQC: '#1A8A1A', 'Not Assessed': '#888' };
@@ -28,6 +28,7 @@ const Discovery = () => {
   const discoveryInFlight = useRef(false);
   const [discoveryPercent, setDiscoveryPercent] = useState(0);
   const [discoveryStage, setDiscoveryStage] = useState('');
+  const [graphExpanded, setGraphExpanded] = useState(false);
 
   useEffect(() => {
     if (activeScanMetadata?.target) {
@@ -103,6 +104,13 @@ const Discovery = () => {
     }
   };
 
+  useEffect(() => {
+    if (!graphExpanded) return;
+    const onKeyDown = (e) => { if (e.key === 'Escape') setGraphExpanded(false); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [graphExpanded]);
+
   const handleAutomatedScan = (host) => {
     // Intelligent target allocation based on subdomain type
     const isVpn = host.toLowerCase().includes('vpn') || host.toLowerCase().includes('gate');
@@ -116,11 +124,115 @@ const Discovery = () => {
     navigate('/triad');
   };
 
+  const renderNetworkGraph = (expanded) => {
+    const assetLimit = expanded ? 20 : 8;
+    const displayAssets = discoveryInfo?.assets?.slice(0, assetLimit) || [];
+    const total = displayAssets.length;
+
+    const nodeR = expanded ? 46 : 38;
+    const gap = expanded ? 26 : 20;
+    // Keep adjacent node circles from touching/overlapping regardless of how
+    // many assets are shown, by deriving the orbit radius from the chord
+    // formula for evenly-spaced points instead of a fixed guess.
+    const minDistance = total > 1 ? (nodeR + gap) / Math.sin(Math.PI / total) : 0;
+    const baseDistance = expanded ? 260 : 175;
+    const distance = Math.max(baseDistance, minDistance);
+
+    const pad = nodeR + (expanded ? 70 : 55);
+    const vbW = (distance + pad) * 2;
+    const vbH = (distance + pad) * 2;
+    const cx = vbW / 2;
+    const cy = vbH / 2;
+
+    const maxHostFontSize = expanded ? 15 : 12;
+    const minHostFontSize = expanded ? 9 : 7;
+    const maxChars = expanded ? 16 : 12;
+    // Monospace glyphs run ~0.62x their font-size wide; shrink the label to
+    // whatever fits the circle's usable chord instead of letting long
+    // hostnames run past the edge.
+    const usableWidth = nodeR * 1.7;
+    const fontSizeFor = (label) => {
+      const fit = usableWidth / (label.length * 0.62);
+      return Math.max(minHostFontSize, Math.min(maxHostFontSize, fit));
+    };
+
+    return (
+      <svg width="100%" height="100%" viewBox={`0 0 ${vbW} ${vbH}`} style={{ filter: 'drop-shadow(0 4px 12px rgba(100,30,0,0.08))' }}>
+        <defs>
+          <filter id="glow-node">
+            <feGaussianBlur stdDeviation="2.5" result="coloredBlur" />
+            <feMerge>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <filter id="shadow">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.2" />
+          </filter>
+          <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style={{ stopColor: '#E09D20', stopOpacity: 1 }} />
+            <stop offset="100%" style={{ stopColor: '#C8860A', stopOpacity: 1 }} />
+          </linearGradient>
+        </defs>
+
+        {/* Central Target */}
+        <g filter="url(#shadow)">
+          <circle cx={cx} cy={cy} r={expanded ? 38 : 30} fill="url(#goldGrad)" filter="url(#glow-node)" />
+          <circle cx={cx} cy={cy} r={expanded ? 44 : 35} fill="none" stroke="var(--pnb-gold)" strokeWidth="2" opacity="0.4">
+            <animate attributeName="r" from={expanded ? '44' : '35'} to={expanded ? '66' : '55'} dur="2.5s" repeatCount="indefinite" />
+            <animate attributeName="opacity" from="0.4" to="0" dur="2.5s" repeatCount="indefinite" />
+          </circle>
+        </g>
+        <text x={cx} y={cy + 8} fill="#2C1A00" fontSize={expanded ? 14 : 12} fontWeight="700" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>ROOT</text>
+        <text x={cx} y={cy + (expanded ? 58 : 50)} fill="#7A5A30" fontSize={expanded ? 13 : 11} fontWeight="600" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>{discoveryInfo?.base_domain || target}</text>
+
+        {/* Orbital Assets */}
+        {displayAssets.map((asset, i) => {
+          const angle = (i * 360 / total) * (Math.PI / 180);
+          const x = cx + distance * Math.cos(angle);
+          const y = cy + distance * Math.sin(angle);
+          const color = tagColor(asset.tag);
+          const bgColor = asset.tag === 'ElitePQC' ? '#F0FFF0' : asset.tag === 'Standard' ? '#FFF8EE' : '#FFF3F3';
+          const hostShort = asset.host.split('.')[0] || 'ROOT';
+          const hostLabel = hostShort.length > maxChars ? hostShort.slice(0, maxChars - 1) + '…' : hostShort;
+          const hostFontSize = fontSizeFor(hostLabel);
+          const pillarLabel = asset.pillars[0]?.split('/')[0] || 'Web';
+
+          return (
+            <g key={i} style={{ cursor: 'pointer' }} opacity="0.9" onClick={() => handleAutomatedScan(asset.host)}>
+              <title>{asset.host} — {pillarLabel}</title>
+
+              {/* Connection Line */}
+              <line x1={cx} y1={cy} x2={x} y2={y} stroke={color} strokeWidth="2" strokeDasharray="5 5" opacity="0.4" />
+
+              {/* Node Circle Background */}
+              <circle cx={x} cy={y} r={nodeR} fill={bgColor} stroke={color} strokeWidth="2" filter="url(#shadow)" />
+
+              {/* Node Content — single centered line, sized to fit the circle */}
+              <text x={x} y={y + hostFontSize * 0.35} fill={color} fontSize={hostFontSize} fontWeight="700" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>
+                {hostLabel}
+              </text>
+
+              {/* Pillar tag — rendered below the node, outside the circle, so it never crowds the host label */}
+              <rect x={x - 26} y={y + nodeR + 6} width="52" height="15" rx="7.5" fill={bgColor} stroke={color} strokeWidth="1" opacity="0.95" />
+              <text x={x} y={y + nodeR + 16.5} fill={color} fontSize={expanded ? 10 : 9} fontWeight="600" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>
+                {pillarLabel}
+              </text>
+
+              {/* Status Indicator */}
+              <circle cx={x + nodeR * 0.7} cy={y - nodeR * 0.7} r={expanded ? 6 : 5} fill={color} />
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
+
   if (!activeScanId) {
     return (
       <div id="page-discovery" className="page-view" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <div className="card" style={{ textAlign: 'center', padding: '50px', maxWidth: '500px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '20px' }}>🛰️</div>
+          <div style={{ fontSize: '48px', marginBottom: '20px' }}></div>
           <h2 style={{ fontWeight: 800, marginBottom: '10px' }}>Active Audit Required</h2>
           <p style={{ color: '#666', fontSize: '14px', marginBottom: '24px' }}>
             Asset Discovery requires a valid audit context. Please return to the Dashboard 
@@ -133,81 +245,49 @@ const Discovery = () => {
   }
 
   return (
+    <>
+    {graphExpanded && (
+      <div className="graph-fullscreen-overlay">
+        <div className="graph-fullscreen-header">
+          <div className="card-title" style={{ margin: 0, color: '#fff' }}>Network Asset Graph — {discoveryInfo?.base_domain || target}</div>
+          <button
+            type="button"
+            className="graph-expand-btn"
+            aria-label="Minimize network graph"
+            onClick={() => setGraphExpanded(false)}
+          >
+            <Minimize2 size={16} />
+          </button>
+        </div>
+        <div className="graph-fullscreen-canvas">
+          {renderNetworkGraph(true)}
+        </div>
+      </div>
+    )}
     <div id="page-discovery" className="page-view">
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
         <div className="card" style={{ margin: 0, padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '20px', borderBottom: '1px solid #FAECD4' }}>
-            <div className="card-title" style={{ margin: 0 }}>🌐 Network Asset Graph</div>
-            <div style={{ fontSize: '12px', color: '#7A5A30', marginTop: '8px' }}>Infrastructure Overview: {discoveryInfo?.base_domain || target} (Primary Nodes)</div>
+          <div style={{ padding: '20px', borderBottom: '1px solid #FAECD4', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div className="card-title" style={{ margin: 0 }}>Network Asset Graph</div>
+              <div style={{ fontSize: '12px', color: '#7A5A30', marginTop: '8px' }}>Infrastructure Overview: {discoveryInfo?.base_domain || target} (Primary Nodes)</div>
+            </div>
+            <button
+              type="button"
+              className="graph-expand-btn"
+              aria-label="Expand network graph"
+              onClick={() => setGraphExpanded(true)}
+            >
+              <Maximize2 size={16} />
+            </button>
           </div>
           <div className="network-canvas-wrap" style={{ position: 'relative', height: '450px', background: 'linear-gradient(135deg, #FFFBF5 0%, #FFF8E7 100%)', overflow: 'hidden', borderRadius: 0 }}>
-            <svg width="100%" height="100%" viewBox="0 0 800 450" style={{ filter: 'drop-shadow(0 4px 12px rgba(100,30,0,0.08))' }}>
-              <defs>
-                <filter id="glow-node">
-                  <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
-                  <feMerge>
-                    <feMergeNode in="coloredBlur"/>
-                    <feMergeNode in="SourceGraphic"/>
-                  </feMerge>
-                </filter>
-                <filter id="shadow">
-                  <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.2"/>
-                </filter>
-                <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" style={{ stopColor: '#E09D20', stopOpacity: 1 }} />
-                  <stop offset="100%" style={{ stopColor: '#C8860A', stopOpacity: 1 }} />
-                </linearGradient>
-              </defs>
-              
-              {/* Central Target */}
-              <g filter="url(#shadow)">
-                <circle cx="400" cy="225" r="30" fill="url(#goldGrad)" filter="url(#glow-node)" />
-                <circle cx="400" cy="225" r="35" fill="none" stroke="var(--pnb-gold)" strokeWidth="2" opacity="0.4">
-                  <animate attributeName="r" from="35" to="55" dur="2.5s" repeatCount="indefinite" />
-                  <animate attributeName="opacity" from="0.4" to="0" dur="2.5s" repeatCount="indefinite" />
-                </circle>
-              </g>
-              <text x="400" y="233" fill="#2C1A00" fontSize="12" fontWeight="700" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>ROOT</text>
-              <text x="400" y="275" fill="#7A5A30" fontSize="11" fontWeight="600" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>{discoveryInfo?.base_domain || target}</text>
-
-              {/* Orbital Assets - Limited to top 12 for clean UI */}
-              {discoveryInfo?.assets?.slice(0, 12).map((asset, i) => {
-                const displayAssets = discoveryInfo.assets.slice(0, 12);
-                const total = displayAssets.length;
-                const angle = (i * 360 / total) * (Math.PI / 180);
-                const distance = 160;
-                const x = 400 + distance * Math.cos(angle);
-                const y = 225 + distance * Math.sin(angle);
-                const color = tagColor(asset.tag);
-                const bgColor = asset.tag === 'ElitePQC' ? '#F0FFF0' : asset.tag === 'Standard' ? '#FFF8EE' : '#FFF3F3';
-                
-                return (
-                  <g key={i} style={{ cursor: 'pointer' }} opacity="0.9" onClick={() => handleAutomatedScan(asset.host)}>
-                    {/* Connection Line */}
-                    <line x1="400" y1="225" x2={x} y2={y} stroke={color} strokeWidth="2" strokeDasharray="5 5" opacity="0.4" />
-                    
-                    {/* Node Circle Background */}
-                    <circle cx={x} cy={y} r="28" fill={bgColor} stroke={color} strokeWidth="2" filter="url(#shadow)" />
-                    
-                    {/* Node Content */}
-                    <text x={x} y={y - 2} fill={color} fontSize="9" fontWeight="700" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>
-                      {asset.host.split('.')[0] || 'ROOT'}
-                    </text>
-                    <text x={x} y={y + 10} fill="#7A5A30" fontSize="8" textAnchor="middle" fontFamily="var(--mono)" style={{ pointerEvents: 'none' }}>
-                      {asset.pillars[0]?.split('/')[0] || 'Web'}
-                    </text>
-                    
-                    {/* Status Indicator */}
-                    <circle cx={x + 18} cy={y - 18} r="5" fill={color} />
-                  </g>
-                );
-              })}
-            </svg>
+            {renderNetworkGraph(false)}
           </div>
         </div>
 
         <div className="card" style={{ margin: 0, background: 'linear-gradient(135deg, #F5FBF5 0%, #F0FFF0 100%)', borderLeft: '5px solid #1A8A1A' }}>
-          <div className="card-title" style={{ fontSize: '14px', color: '#1A8A1A' }}>🛡️ Discovery Guide</div>
+          <div className="card-title" style={{ fontSize: '14px', color: '#1A8A1A' }}>Discovery Guide</div>
           <div style={{ fontSize: '12px', lineHeight: '1.7', color: '#2C1A00' }}>
             <div style={{ marginBottom: '14px', padding: '12px', background: 'rgba(26, 138, 26, 0.05)', borderRadius: '8px', borderLeft: '3px solid #1A8A1A' }}>
               <b style={{ color: '#1A8A1A' }}>⬡ Multi-Asset Probe:</b>
@@ -218,7 +298,7 @@ const Discovery = () => {
               <p style={{ margin: '4px 0 0 0', opacity: 0.85 }}>Flags legacy cryptography (RSA-2048) across all discovered assets.</p>
             </div>
             <button className="btn btn-gold btn-sm" style={{ width: '100%', marginTop: '12px' }} onClick={() => runDiscovery()} disabled={loading}>
-              {loading ? `⏳ Refreshing... ${discoveryPercent}%` : '⚡ Refresh Discovery'}
+              {loading ? `Refreshing... ${discoveryPercent}%` : 'Refresh Discovery'}
             </button>
           </div>
         </div>
@@ -230,7 +310,7 @@ const Discovery = () => {
         {loading && (
           <div style={{ padding: '40px', textAlign: 'center' }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '13px', color: 'var(--pnb-gold)' }}>
-              🛰️ MAPPING NETWORK TOPOLOGY FOR {activeScanMetadata?.target?.toUpperCase()}...
+              MAPPING NETWORK TOPOLOGY FOR {activeScanMetadata?.target?.toUpperCase()}...
             </div>
             <div style={{ fontSize: '11px', color: '#666', margin: '8px 0 16px' }}>
               {discoveryStage || 'Probing subdomains, parsing DNS zones, and classifying asset pillars.'}
@@ -258,7 +338,7 @@ const Discovery = () => {
         {discoveryInfo && !loading && (
           <div className="discovery-results">
             <div style={{ fontSize: '10px', color: '#666', marginBottom: '10px', fontFamily: 'var(--mono)', padding: '6px 10px', background: '#f9f9f9', borderRadius: '6px' }}>
-              ℹ️ QVS/tags are scored off the actual negotiated cipher suite. TLS 1.3 alone is not evidence of PQC — this stack cannot read the negotiated key-exchange group, so ELITEPQC is only assigned when a real PQC/hybrid cipher name is measured.
+              ℹQVS/tags are scored off the actual negotiated cipher suite. TLS 1.3 alone is not evidence of PQC — this stack cannot read the negotiated key-exchange group, so ELITEPQC is only assigned when a real PQC/hybrid cipher name is measured.
             </div>
             <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', gap: '15px' }}>
               <div className="stat-card info">
@@ -342,6 +422,7 @@ const Discovery = () => {
         )}
       </div>
     </div>
+    </>
   );
 };
 

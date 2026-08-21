@@ -12,12 +12,12 @@ const ALGO_FAMILY_MATCHERS = [
 ];
 
 const PILLAR_OPTIONS = [
-  { value: 'Web', label: 'Pillar A — Web/TLS', icon: '🌐' },
-  { value: 'VPN', label: 'Pillar B — VPN/TLS', icon: '🔒' },
-  { value: 'API', label: 'Pillar C — API/TLS', icon: '⚡' },
-  { value: 'Mobile', label: 'Pillar C+ — Mobile/App', icon: '📱' },
-  { value: 'Firmware', label: 'Pillar D — System/Firmware', icon: '🔧' },
-  { value: 'Archival', label: 'Pillar E — Archival/Storage', icon: '🗄️' },
+  { value: 'Web', label: 'Pillar A — Web/TLS' },
+  { value: 'VPN', label: 'Pillar B — VPN/TLS' },
+  { value: 'API', label: 'Pillar C — API/TLS' },
+  { value: 'Mobile', label: 'Pillar C+ — Mobile/App' },
+  { value: 'Firmware', label: 'Pillar D — System/Firmware' },
+  { value: 'Archival', label: 'Pillar E — Archival/Storage' },
 ];
 
 const DEVICE_OPTIONS = ['Server', 'Mobile', 'IoT', 'HSM'];
@@ -229,7 +229,7 @@ const PQCSelector = () => {
     <div style={{ padding: '0' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
-        <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: 'linear-gradient(135deg, #0284c722, #9333ea22)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>🧠</div>
+        <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: 'linear-gradient(135deg, #0284c722, #9333ea22)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}></div>
         <div>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff', textShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>PQC Smart Selector</h2>
           <p style={{ margin: 0, fontSize: '12px', color: 'rgba(255,255,255,0.8)', fontFamily: 'var(--mono)' }}>Rule-Based Algorithm Selection Engine • NIST FIPS 203/204/205 Rule Table • DST PQC Roadmap 2026</p>
@@ -239,9 +239,9 @@ const PQCSelector = () => {
       {/* Tab Navigation */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(0,0,0,0.15)', borderRadius: '10px', padding: '4px', boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.1)' }}>
         {[
-          { id: 'selector', label: '🧠 PQC Selector', badge: 'RULES' },
-          { id: 'registry', label: '📦 Algorithm Registry' },
-          { id: 'audit', label: '🛡️ Verification Audit' },
+          { id: 'selector', label: 'PQC Selector', badge: 'RULES' },
+          { id: 'registry', label: 'Algorithm Registry' },
+          { id: 'audit', label: 'Verification Audit' },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             style={{
@@ -281,7 +281,7 @@ const PQCSelector = () => {
                         border: pillar === p.value ? '1px solid rgba(2,132,199,0.3)' : '1px solid rgba(0,0,0,0.06)',
                         transition: 'all 0.2s',
                       }}>
-                      {p.icon} {p.label}
+                      {p.label}
                     </button>
                   ))}
                 </div>
@@ -365,7 +365,7 @@ const PQCSelector = () => {
                   fontSize: '13px', fontWeight: 700, fontFamily: 'var(--mono)', letterSpacing: '1px',
                   opacity: loading ? 0.6 : 1, transition: 'all 0.3s',
                 }}>
-                {loading ? '⏳ COMPUTING...' : '🧠 RUN SELECTOR'}
+                {loading ? 'COMPUTING...' : 'RUN SELECTOR'}
               </button>
             </div>
           </div>
@@ -376,7 +376,7 @@ const PQCSelector = () => {
 
             {!result ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', opacity: 0.3 }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🧠</div>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}></div>
                 <p style={{ fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center' }}>Configure scan metadata and run the Selector<br/>to see the optimal PQC algorithm recommendation.</p>
               </div>
             ) : (

@@ -58,7 +58,7 @@ const CBOM = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h2 style={{ margin: 0, fontSize: '24px', fontWeight: 800, color: '#111' }}>Cryptographic Bill of Materials (CBOM)</h2>
         <div style={{ padding: '8px 16px', background: '#1A8A1A22', color: '#1A8A1A', borderRadius: '30px', fontWeight: 700, fontSize: '13px' }}>
-          🛡️ CycloneDX 1.5 Compliant
+          CycloneDX 1.5 Compliant
         </div>
       </div>
 
@@ -72,7 +72,7 @@ const CBOM = () => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '25px', marginBottom: '25px' }}>
         <div className="card" style={{ padding: '20px' }}>
-          <div className="card-title" style={{ fontSize: '14px', marginBottom: '20px' }}>🛡️ Algorithm Inventory Pulse</div>
+          <div className="card-title" style={{ fontSize: '14px', marginBottom: '20px' }}>Algorithm Inventory Pulse</div>
           <div style={{ height: '260px' }}>
             <Bar
               data={{
@@ -89,7 +89,7 @@ const CBOM = () => {
           </div>
         </div>
         <div className="card" style={{ padding: '20px' }}>
-          <div className="card-title" style={{ fontSize: '14px', marginBottom: '20px' }}>⚠️ PQC Readiness Distribution</div>
+          <div className="card-title" style={{ fontSize: '14px', marginBottom: '20px' }}>PQC Readiness Distribution</div>
           <div style={{ height: '260px' }}>
             <Doughnut
               data={{
@@ -132,7 +132,7 @@ const CBOM = () => {
                   <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600 }}>{item.algorithm}</td>
                   <td>{item.quantumSafe === null || item.quantumSafe === undefined
                     ? <span className="pqc-na">— Not Assessed</span>
-                    : item.quantumSafe ? <span className="pqc-yes">✅ READY</span> : <span className="pqc-no">❌ VULNERABLE</span>}</td>
+                    : item.quantumSafe ? <span className="pqc-yes">READY</span> : <span className="pqc-no">VULNERABLE</span>}</td>
                   <td>
                     <span className={`risk-badge ${item.risk === 'Critical' ? 'rb-critical' : item.risk === 'High' ? 'rb-high' : item.risk === 'Not Assessed' ? 'rb-na' : 'rb-low'}`}>
                       {item.risk}
@@ -161,7 +161,7 @@ const CBOM = () => {
               }
             }}
           >
-            📥 Export CycloneDX v1.5 JSON
+            Export CycloneDX v1.5 JSON
           </button>
         </div>
       </div>

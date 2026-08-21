@@ -8,9 +8,9 @@ const Rating = () => {
   // which would render as a perfect 1000/1000 "Elite-PQC" rating.
   const hasScore = activeData && qvs !== null && qvs !== undefined;
   const ratingScore = hasScore ? Math.max(0, 1000 - (qvs * 8)) : null;
-  const ratingLabel = !activeData ? '⭕ No Audit Data'
-    : !hasScore ? '⚠ Not Assessed — no pillar could be probed'
-    : ratingScore > 700 ? '✓ Elite-PQC Status' : ratingScore > 400 ? '🔰 Standard Status' : '⭕ Legacy Status';
+  const ratingLabel = !activeData ? 'No Audit Data'
+    : !hasScore ? 'Not Assessed — no pillar could be probed'
+    : ratingScore > 700 ? '✓ Elite-PQC Status' : ratingScore > 400 ? 'Standard Status' : 'Legacy Status';
 
   return (
     <div id="page-rating" className="page-view">
@@ -25,9 +25,9 @@ const Rating = () => {
             <div className="card-title">Rating Scale</div>
             <table className="tier-table">
               <tbody>
-                <tr><td>⭕ <b>Legacy</b></td><td style={{ color: '#C0272D', fontWeight: 700 }}>&lt; 400</td></tr>
-                <tr><td>🔰 <b>Standard</b></td><td style={{ color: '#D47800', fontWeight: 700 }}>400 - 700</td></tr>
-                <tr><td>✅ <b>Elite-PQC</b></td><td style={{ color: '#1A8A1A', fontWeight: 700 }}>&gt; 700</td></tr>
+                <tr><td><b>Legacy</b></td><td style={{ color: '#C0272D', fontWeight: 700 }}>&lt; 400</td></tr>
+                <tr><td><b>Standard</b></td><td style={{ color: '#D47800', fontWeight: 700 }}>400 - 700</td></tr>
+                <tr><td><b>Elite-PQC</b></td><td style={{ color: '#1A8A1A', fontWeight: 700 }}>&gt; 700</td></tr>
               </tbody>
             </table>
           </div>

@@ -107,7 +107,7 @@ const Posture = () => {
                 </td>
                 <td>{item.quantumSafe === null || item.quantumSafe === undefined
                   ? '— Not Assessed'
-                  : item.quantumSafe ? `✅ ${nistStandard(item.algorithm)}` : '❌ VULNERABLE'}</td>
+                  : item.quantumSafe ? `${nistStandard(item.algorithm)}` : 'VULNERABLE'}</td>
               </tr>
             ))}
             {cbomItems.length === 0 && (

@@ -109,21 +109,21 @@ const Reporting = () => {
         <div className={`report-card ${reportType === 'executive' ? 'active' : ''}`} 
              style={{ background: '#fff', border: reportType === 'executive' ? '2px solid var(--pnb-gold)' : '1px solid #ddd', padding: '24px', borderRadius: '12px', cursor: 'pointer' }}
              onClick={() => setReportType('executive')}>
-          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}>🏢</div>
+          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}></div>
           <div className="rc-title" style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>Executive Summary</div>
           <div className="rc-desc" style={{ fontSize: '12px', color: '#777', marginTop: '8px' }}>High-level risk posture and PQC readiness score mapped to internal infrastructure KPIs.</div>
         </div>
         <div className={`report-card ${reportType === 'technical' ? 'active' : ''}`} 
              style={{ background: '#fff', border: reportType === 'technical' ? '2px solid var(--pnb-gold)' : '1px solid #ddd', padding: '24px', borderRadius: '12px', cursor: 'pointer' }}
              onClick={() => setReportType('technical')}>
-          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}>🛠️</div>
+          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}></div>
           <div className="rc-title" style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>Technical CBOM</div>
           <div className="rc-desc" style={{ fontSize: '12px', color: '#777', marginTop: '8px' }}>Detailed cryptographic inventory (CycloneDX) and per-asset OID analysis.</div>
         </div>
         <div className={`report-card ${reportType === 'compliance' ? 'active' : ''}`} 
              style={{ background: '#fff', border: reportType === 'compliance' ? '2px solid var(--pnb-gold)' : '1px solid #ddd', padding: '24px', borderRadius: '12px', cursor: 'pointer' }}
              onClick={() => setReportType('compliance')}>
-          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}>⚖️</div>
+          <div className="rc-icon" style={{ fontSize: '32px', marginBottom: '12px' }}></div>
           <div className="rc-title" style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>Compliance Audit</div>
           <div className="rc-desc" style={{ fontSize: '12px', color: '#777', marginTop: '8px' }}>Formal gap analysis against NIST FIPS 203/204 and Annexure-A standards.</div>
         </div>
@@ -219,17 +219,17 @@ const Reporting = () => {
               onClick={handleSendEmail}
               disabled={sending}
             >
-              {sending ? '📤 SENDING...' : '📧 SEND TO EMAIL'}
+              {sending ? 'SENDING...' : 'SEND TO EMAIL'}
             </button>
           </div>
         </div>
 
         <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button className="btn btn-gold" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('pdf')}>📄 Download PDF</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('json')}>📦 Download JSON</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('xml')}>⚙️ Download XML</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('csv')}>📊 Download CSV</button>
-          <button className="btn btn-gold" style={{ padding: '12px 20px', marginLeft: 'auto' }} onClick={handleSaveSchedule}>💾 Save Schedule</button>
+          <button className="btn btn-gold" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('pdf')}>Download PDF</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('json')}>Download JSON</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('xml')}>Download XML</button>
+          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('csv')}>Download CSV</button>
+          <button className="btn btn-gold" style={{ padding: '12px 20px', marginLeft: 'auto' }} onClick={handleSaveSchedule}>Save Schedule</button>
         </div>
 
         <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px' }}>
@@ -248,7 +248,7 @@ const Reporting = () => {
                 onClick={() => handleExportCanonical(fmt)}
                 disabled={exporting === fmt}
               >
-                {exporting === fmt ? '⏳' : '📄'} {fmt}
+                {exporting === fmt ? '' : ''} {fmt}
               </button>
             ))}
           </div>

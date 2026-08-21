@@ -111,7 +111,7 @@ function App() {
               onClick={() => setShowP(!showP)} 
               style={{ position: 'absolute', right: '10px', top: '10px', cursor: 'pointer', fontSize: '14px', color: '#D4A017' }}
             >
-              {showP ? '👁️' : '🔒'}
+              {showP ? 'Hide' : 'Show'}
             </span>
           </div>
           <span className="login-forgot">Forgot Password?</span>

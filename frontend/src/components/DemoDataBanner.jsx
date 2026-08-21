@@ -17,16 +17,16 @@ const DemoDataBanner = ({ provenance }) => {
         gap: '10px',
         padding: '10px 16px',
         marginBottom: '16px',
-        background: 'rgba(212, 120, 0, 0.1)',
+        background: '#3A2200',
         border: '1px solid #D47800',
         borderRadius: '6px',
-        color: '#D47800',
+        color: '#FFC876',
         fontFamily: 'var(--mono)',
         fontSize: '12px',
         fontWeight: 700,
       }}
     >
-      <span style={{ fontSize: '15px' }}>⚠️</span>
+      <span style={{ fontSize: '15px', color: '#D47800' }}>&#9888;</span>
       <span>
         Showing seeded demonstration data. Run a scan to populate this view with measured results.
       </span>

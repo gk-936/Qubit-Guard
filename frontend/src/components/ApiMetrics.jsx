@@ -6,7 +6,7 @@ const ApiMetrics = ({ data }) => {
   if (!data) return (
     <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '200px', opacity: 0.5 }}>
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '24px', marginBottom: '10px' }}>🌐</div>
+        <div style={{ fontSize: '24px', marginBottom: '10px' }}></div>
         <div style={{ fontSize: '12px', fontFamily: 'var(--mono)' }}>Awaiting API Discovery Data...</div>
       </div>
     </div>
@@ -17,7 +17,7 @@ const ApiMetrics = ({ data }) => {
   return (
     <div className="card">
       <div className="card-title">
-        <span className="ct-icon">🌐</span> API Discovery & Bucketing (HTTP-Probed)
+        API Discovery & Bucketing (HTTP-Probed)
       </div>
       <div className="grid-2" style={{ gap: '16px' }}>
         <div>

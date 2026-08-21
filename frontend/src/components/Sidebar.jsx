@@ -2,32 +2,33 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useScan } from '../context/ScanContext';
 
-const Sidebar = () => {
+const Sidebar = ({ isOpen, onNavigate, onLogout }) => {
   const { resetAudit, activeScanMetadata } = useScan();
   const navigate = useNavigate();
 
   const handleNewAudit = () => {
     resetAudit();
     navigate('/dashboard');
+    onNavigate?.();
   };
   const menuItems = [
-    { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
-    { id: 'inventory', icon: '📋', label: 'Asset Inventory' },
-    { id: 'discovery', icon: '🔍', label: 'Asset Discovery' },
-    { id: 'cbom', icon: '📦', label: 'CBOM' },
-    { id: 'posture', icon: '📊', label: 'Posture of PQC' },
-    { id: 'rating', icon: '⭐', label: 'Cyber Rating' },
-    { id: 'reporting', icon: '📊', label: 'Reporting' },
-    { id: 'triad', icon: '⚡', label: 'Triad Scanner', badge: 'NEW' },
-    { id: 'history', icon: '📜', label: 'Scan History' },
-    { id: 'mobile', icon: '📱', label: 'Mobile App Scanning' },
-    { id: 'remediation', icon: '🔧', label: 'Auto-Remediation' },
-    { id: 'qday', icon: '☢️', label: 'Q-Day Simulator' },
-    { id: 'pqc-selector', icon: '🧠', label: 'PQC Selector', badge: 'RULES' },
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'inventory', label: 'Asset Inventory' },
+    { id: 'discovery', label: 'Asset Discovery' },
+    { id: 'cbom', label: 'CBOM' },
+    { id: 'posture', label: 'Posture of PQC' },
+    { id: 'rating', label: 'Cyber Rating' },
+    { id: 'reporting', label: 'Reporting' },
+    { id: 'triad', label: 'Triad Scanner', badge: 'NEW' },
+    { id: 'history', label: 'Scan History' },
+    { id: 'mobile', label: 'Mobile App Scanning' },
+    { id: 'remediation', label: 'Auto-Remediation' },
+    { id: 'qday', label: 'Q-Day Simulator' },
+    { id: 'pqc-selector', label: 'PQC Selector', badge: 'RULES' },
   ];
 
   return (
-    <div id="sidebar">
+    <div id="sidebar" className={isOpen ? 'open' : ''}>
       <div className="sb-logo-area" style={{ padding: '12px', gap: '8px' }}>
         <svg className="sb-shield" viewBox="0 0 60 70" fill="none" style={{ width: '32px', height: '32px' }}>
           <path d="M30 4L56 14V36C56 52 44 63 30 68C16 63 4 52 4 36V14L30 4Z" fill="url(#ss)" stroke="#D4A017" strokeWidth="1.5" />
@@ -61,7 +62,7 @@ const Sidebar = () => {
           onMouseOver={(e) => e.target.style.transform = 'translateY(-1px)'}
           onMouseOut={(e) => e.target.style.transform = 'none'}
         >
-          <span>⚡</span> AUDIT NEW BANK
+          AUDIT NEW BANK
         </button>
       </div>
 
@@ -71,16 +72,17 @@ const Sidebar = () => {
             key={item.id}
             to={`/${item.id}`}
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            onClick={onNavigate}
           >
-            <span className="ni-icon">{item.icon}</span>
             <span className="ni-label">{item.label}</span>
             {item.badge && <span className="ni-badge">{item.badge}</span>}
           </NavLink>
         ))}
       </div>
       <div className="sb-footer">
-        <div className="sb-user">👤 auditor@qubitguard.ai</div>
+        <div className="sb-user">auditor@qubitguard.ai</div>
         <div className="sb-user" style={{ marginTop: '4px' }}>Role: Security Admin</div>
+        <button onClick={onLogout} className="sb-logout-btn">Logout</button>
       </div>
     </div>
   );
