@@ -3,15 +3,20 @@ Qubit-Guard — FastAPI Backend Entry Point
 """
 
 import os
+import time
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
+from logging_config import configure_logging
+configure_logging()
+log = logging.getLogger(__name__)
 
 from db import engine, Base, ensure_schema
 from seed_data import seed
@@ -91,6 +96,27 @@ app.add_middleware(
     # token, and the active-scan context header.
     allow_headers=["Content-Type", "Authorization", "X-Scan-Id"],
 )
+
+
+# ── Request/response + exception logging ────────────────────────────────────
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started = time.monotonic()
+    log.debug("--> %s %s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Anything that escapes a route handler unhandled would otherwise
+        # surface to the client as a bare "Internal Server Error" with the
+        # traceback visible nowhere — log it here before FastAPI's default
+        # handler converts it to a 500.
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log.error("XXX %s %s failed after %dms\n%s", request.method, request.url.path, elapsed_ms, traceback.format_exc())
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    level = logging.WARNING if response.status_code >= 400 else logging.INFO
+    log.log(level, "<-- %s %s %d (%dms)", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
 
 
 # ── Health Check ──────────────────────────────────────────────────────────────

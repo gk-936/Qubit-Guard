@@ -210,6 +210,32 @@ print("[PQC] Archival key wrapping migrated from {ALGO} to BIKE-L1.")
 """
 
 
+# ── Severity → priority/effort/timeline/alternatives mapping ──────────────
+
+_PRIORITY_BY_SEVERITY = {
+    "critical": {"priority": "P0", "fix_within_days": 7, "effort": "High"},
+    "high": {"priority": "P1", "fix_within_days": 30, "effort": "Medium"},
+    "medium": {"priority": "P2", "fix_within_days": 90, "effort": "Medium"},
+    "low": {"priority": "P3", "fix_within_days": 180, "effort": "Low"},
+}
+
+_ALTERNATIVES_BY_PILLAR = {
+    "web": ["ML-KEM-768 hybrid (x25519_kyber768) — recommended", "ML-KEM-1024 for higher security margin", "Classical ECDHE as interim fallback only"],
+    "vpn": ["ML-KEM-768 via OQS OpenVPN fork", "strongSwan PQC proposals (5.9.12+)", "Vendor-native PQC (Cisco IOS XE 17.12+)"],
+    "api": ["ML-DSA-65 (Dilithium3) — recommended", "ML-DSA-87 for higher security margin", "SLH-DSA-128f as conservative hash-based backup"],
+    "firmware": ["XMSS-SHA2_10_256 (stateful, HSM-backed)", "LMS as alternative stateful hash-based scheme"],
+    "archival": ["BIKE-L1 for long-term key wrapping", "HQC-128 as NIST Round-4 alternative"],
+}
+
+
+def _severity_meta(pillar: str, findings: dict) -> dict:
+    sevs = [f["severity"] for f in findings.get(pillar, []) if f["severity"] in _PRIORITY_BY_SEVERITY]
+    worst = "critical" if "critical" in sevs else "high" if "high" in sevs else "medium" if "medium" in sevs else "low"
+    meta = dict(_PRIORITY_BY_SEVERITY[worst])
+    meta["alternatives"] = _ALTERNATIVES_BY_PILLAR.get(pillar, [])
+    return meta
+
+
 def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url: str = "", api_url: str = "") -> list:
     """Generate per-pillar remediation scripts based on actual scan findings."""
     if not findings:
@@ -243,6 +269,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "bash",
             "summary": f"Detected {algo} on {web_host}. Update TLS config for FIPS 203 (ML-KEM).",
             "code": _sub(_WEB_TEMPLATE, algo),
+            **_severity_meta("web", findings),
         })
 
     if has_vulnerability("vpn"):
@@ -253,6 +280,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "bash",
             "summary": f"Detected {algo} on {vpn_host}. Upgrade to PQC key exchange.",
             "code": _sub(_VPN_TEMPLATE, algo),
+            **_severity_meta("vpn", findings),
         })
 
     if has_vulnerability("api"):
@@ -263,6 +291,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "python",
             "summary": f"Detected {algo} on {api_host}. Migrate JWT signing to FIPS 204 (ML-DSA).",
             "code": _sub(_API_TEMPLATE, algo),
+            **_severity_meta("api", findings),
         })
         scripts.append({
             "pillar": "api_backup",
@@ -270,6 +299,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "python",
             "summary": "Deploy SLH-DSA (FIPS 205) as a conservative backup for critical payment APIs.",
             "code": _sub(_API_BACKUP_TEMPLATE, algo),
+            **_severity_meta("api", findings),
         })
         scripts.append({
             "pillar": "mobile",
@@ -277,6 +307,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "python",
             "summary": "Deploy FN-DSA (Falcon) for mobile app signing — smallest lattice signatures.",
             "code": _sub(_MOBILE_TEMPLATE, algo),
+            **_severity_meta("api", findings),
         })
 
     if has_vulnerability("firmware"):
@@ -287,6 +318,7 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "bash",
             "summary": f"Detected {algo} in PKI. Migrate firmware signing to XMSS (RFC 8391) per NIST SP 800-208.",
             "code": _sub(_FIRMWARE_TEMPLATE, algo),
+            **_severity_meta("firmware", findings),
         })
 
     if has_vulnerability("archival"):
@@ -297,8 +329,10 @@ def generate_triad_remediation(findings: dict = None, web_url: str = "", vpn_url
             "type": "python",
             "summary": f"Detected {algo} key exchange. Migrate archival key wrapping to BIKE-L1 or HQC-128.",
             "code": _sub(_ARCHIVAL_TEMPLATE, algo),
+            **_severity_meta("archival", findings),
         })
 
+    scripts.sort(key=lambda s: s.get("priority", "P3"))
     return scripts
 
 

@@ -428,13 +428,22 @@ def probe_host(host: str, base_domain: str) -> dict:
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 web_active = True
                 asset_info["pillars"].append("Web/TLS")
-                
-                # Check TLS version
-                if tls_sock.version() == "TLSv1.3":
-                    asset_info["pqc_ready"] = True
-                    asset_info["details"]["tls_version"] = "1.3 (PQC-Ready)"
-                else:
-                    asset_info["details"]["tls_version"] = tls_sock.version()
+
+                # Captured here so the QVS step below can score off the cipher
+                # this same handshake already negotiated, instead of opening a
+                # second TLS connection to the same host just to ask again.
+                cipher = tls_sock.cipher()
+                asset_info["_cipher_name"] = cipher[0] if cipher else None
+
+                # TLS 1.3 alone is NOT evidence of post-quantum readiness — it
+                # just means the TLS 1.3 protocol was negotiated, which almost
+                # always still uses a classical (X25519/ECDHE) key exchange
+                # today. Python's stdlib ssl module doesn't expose the
+                # negotiated key-share group, so this code has no way to
+                # confirm a real PQC hybrid group (e.g. x25519_kyber768) was
+                # used. pqc_ready is set later, from the actual cipher name via
+                # _qvs() — the only evidence-based signal available here.
+                asset_info["details"]["tls_version"] = tls_sock.version()
                 
                 # SAN Extraction
                 cert = tls_sock.getpeercert()
@@ -521,14 +530,113 @@ def probe_host(host: str, base_domain: str) -> dict:
     if web_active and not asset_info["pillars"]:
         asset_info["pillars"].append("Web/TLS")
 
+    # Compute per-asset QVS score and Tag (LEGACY, STANDARD, ELITEPQC).
+    # Scored off the cipher the Web/TLS probe above already negotiated —
+    # NOT a second handshake. A per-host re-probe here would double the
+    # network round-trips across the ~130+ dictionary candidates (plus
+    # permutation/SAN/PTR passes), which is exactly what made discovery slow.
+    cipher_name = asset_info.pop("_cipher_name", None)
+    if web_active and cipher_name:
+        from services.scanner_engine import _qvs
+
+        # A TLS 1.3 cipher name alone never reveals the key-exchange group
+        # (classical vs. real hybrid-PQC) — only a TLS 1.3 host gets this
+        # extra raw-socket probe (tls_kex_probe.py), which reads that group
+        # directly off the wire. TLS 1.2 hosts skip it entirely: their cipher
+        # name already names the key exchange unambiguously, so a second
+        # connection would just be the redundant round-trip already fixed once.
+        score_target = cipher_name
+        tls_ver_for_kex = asset_info["details"].get("tls_version", "")
+        if "1.3" in tls_ver_for_kex:
+            try:
+                from services.tls_kex_probe import probe_key_exchange
+                kex = probe_key_exchange(host)
+                if kex["reachable"] and kex["group"]:
+                    score_target = kex["group"]
+                    asset_info["details"]["key_exchange_group"] = kex["group"]
+            except Exception as e:
+                log.debug("TLS 1.3 key-exchange probe failed for %s: %s", host, e)
+
+        asset_info["qvs"] = _qvs(score_target)
+        asset_info["qvs_evidence"] = "measured"
+        # Surfaced so downstream consumers (CBOM generation) can report what
+        # was actually negotiated instead of guessing/fabricating an algorithm.
+        asset_info["details"]["cipher"] = cipher_name
+
+        # Explains WHY the tag below landed where it did — "LEGACY" alone reads
+        # identically for a genuinely outdated TLS 1.2 host and a fully current
+        # TLS 1.3 host that just happens to use classical (non-PQC) key
+        # exchange, which are very different situations a user can't tell
+        # apart from the bare tag. This makes the actual measured reason visible.
+        kex_group = asset_info["details"].get("key_exchange_group")
+        if kex_group:
+            asset_info["tag_reason"] = f"Classical {kex_group} key exchange measured over {tls_ver_for_kex} (quantum-vulnerable)" if asset_info["qvs"] >= 20 \
+                else f"Hybrid-PQC {kex_group} key exchange measured over {tls_ver_for_kex}"
+        else:
+            asset_info["tag_reason"] = f"{cipher_name} cipher suite measured over {tls_ver_for_kex or asset_info['details'].get('tls_version', 'TLS')}"
+    else:
+        # No cipher was captured (probe never reached the handshake, or the
+        # host isn't web-active at all) — nothing measured, so this can only
+        # ever be a rough guess, never a "ready" claim.
+        tls_ver = asset_info["details"].get("tls_version", "")
+        if "1.2" in tls_ver:
+            asset_info["qvs"] = 85
+        else:
+            asset_info["qvs"] = 95
+        asset_info["qvs_evidence"] = "heuristic"
+        asset_info["tag_reason"] = f"Estimated from {tls_ver or 'no TLS response'} alone — cipher suite not captured"
+
+    # pqc_ready is now purely evidence-based: only true if the negotiated
+    # cipher actually matched a known PQC/hybrid-PQC entry in QVS_MAP (score
+    # < 20). Given Python's stdlib ssl module can't see the real key-share
+    # group, this will honestly read False for virtually all hosts today —
+    # which is correct: claiming a host is "PQC-Ready" off TLS 1.3 alone (the
+    # old behavior) was a guess, not a measurement.
+    asset_info["pqc_ready"] = asset_info["qvs"] < 20
+
+    # Assign Tag
+    q = asset_info["qvs"]
+    if q < 20:
+        asset_info["tag"] = "ELITEPQC"
+    elif q < 80:
+        asset_info["tag"] = "STANDARD"
+    else:
+        asset_info["tag"] = "LEGACY"
+
     return asset_info if asset_info["pillars"] else None
 
-def discover_pnb_assets(target_base: str) -> dict:
+def normalize_host(url_or_host: str) -> str:
+    """Strip a URL down to its bare hostname, the same way discover_pnb_assets
+    keys its host set — so callers can match a Triad-scan target against a
+    discovered host without worrying about scheme/path differences."""
+    parsed = urlparse(url_or_host if url_or_host.startswith("http") else f"https://{url_or_host}")
+    return parsed.hostname or url_or_host
+
+
+def discover_pnb_assets(target_base: str, prescanned: dict = None, progress_cb=None) -> dict:
     """
     Real asset discovery engine — DNS brute-force, zone transfer,
     TLS SAN extraction, and CSP/robots.txt scraping.
     Returns only genuinely discovered assets.
+
+    prescanned, if given, maps normalized hostname -> {"qvs": int, "pqc_ready": bool,
+    "tls_version": str}. Hosts already covered by perform_triad_scan (the
+    caller's web/vpn/api targets) can be passed here so this function skips
+    re-probing them with a second TLS handshake and instead reuses the
+    Triad scan's own measured result for that host.
+
+    progress_cb, if given, is called as progress_cb(percent: int, stage: str)
+    at each phase boundary — purely a UI progress hook, behavior and results
+    are identical whether or not it's passed.
     """
+    def _report(pct, stage):
+        if progress_cb:
+            try:
+                progress_cb(pct, stage)
+            except Exception:
+                pass
+
+    prescanned = prescanned or {}
     if not target_base:
         return {"error": "Invalid target"}
 
@@ -556,6 +664,7 @@ def discover_pnb_assets(target_base: str) -> dict:
         "wayback": fetch_wayback_hosts,
         "asn": fetch_asn_ip_range_hosts,
     }
+    _report(3, "Gathering OSINT sources (DNS, crt.sh, Cert Spotter, Wayback, RIPEstat)...")
     gathered = {}
     with ThreadPoolExecutor(max_workers=len(gather_sources)) as executor:
         future_to_source = {executor.submit(fn, base_domain): name for name, fn in gather_sources.items()}
@@ -592,14 +701,28 @@ def discover_pnb_assets(target_base: str) -> dict:
     for asn_host in asn_results:
         targets_to_probe.add(asn_host)
 
+    # Hosts perform_triad_scan already scanned (the caller's web/vpn/api
+    # targets) get skipped here — no point re-opening a TLS connection to
+    # get a QVS score we already measured a moment ago.
+    targets_to_probe -= set(prescanned.keys())
+
     discovered_assets = []
     seen_hosts = set()
 
     # 5. Threaded probing across all targets
+    _report(10, f"Probing {len(targets_to_probe)} candidate subdomains...")
     with ThreadPoolExecutor(max_workers=30) as executor:
         future_to_host = {executor.submit(probe_host, host, base_domain): host for host in targets_to_probe}
+        total_pass1 = len(future_to_host) or 1
+        done_pass1 = 0
         for future in as_completed(future_to_host):
             asset = future.result()
+            done_pass1 += 1
+            if done_pass1 % 10 == 0 or done_pass1 == total_pass1:
+                # Dictionary probing is the single slowest phase, so it gets
+                # the widest percent band (10%-55%) to keep the bar moving
+                # smoothly instead of sitting still for most of the scan.
+                _report(10 + int(45 * done_pass1 / total_pass1), f"Probing candidate subdomains ({done_pass1}/{total_pass1})...")
             if asset and asset["host"] not in seen_hosts:
                 discovered_assets.append(asset)
                 seen_hosts.add(asset["host"])
@@ -614,6 +737,7 @@ def discover_pnb_assets(target_base: str) -> dict:
         # 6. Probe permuted targets (second pass)
         new_targets = targets_to_probe - seen_hosts
         if new_targets:
+            _report(58, f"Probing {len(new_targets)} permutation variants...")
             perm_futures = {executor.submit(probe_host, host, base_domain): host for host in new_targets}
             for future in as_completed(perm_futures):
                 asset = future.result()
@@ -622,6 +746,7 @@ def discover_pnb_assets(target_base: str) -> dict:
                     seen_hosts.add(asset["host"])
 
     # 7. Extract SANs from discovered TLS assets for additional hosts
+    _report(70, "Extracting SANs from discovered certificates...")
     san_hosts = set()
     for asset in discovered_assets:
         for san in asset.get("details", {}).get("discovered_sans", []):
@@ -637,6 +762,7 @@ def discover_pnb_assets(target_base: str) -> dict:
                     discovered_assets.append(asset)
                     seen_hosts.add(asset["host"])
 
+    _report(82, "Running reverse-DNS on discovered IPs...")
     # 8. Reverse-DNS on every IP found so far — a genuinely different signal
     # from everything above (asks DNS directly, doesn't guess a name and
     # check it), can surface hostnames never in the wordlist, a certificate,
@@ -653,10 +779,50 @@ def discover_pnb_assets(target_base: str) -> dict:
                     discovered_assets.append(asset)
                     seen_hosts.add(asset["host"])
 
-    return {
+    _report(92, "Compiling asset inventory and QVS scores...")
+    # Fold the prescanned (Triad-scan-covered) hosts into the result set,
+    # reusing their already-measured QVS instead of a fresh probe. A plain
+    # DNS lookup (no TLS handshake) is still fine here just to show an IP.
+    for host, info in prescanned.items():
+        if host in seen_hosts:
+            continue
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            ip = None
+        qvs = info.get("qvs")
+        qvs = qvs if qvs is not None else 95
+        tag = "ELITEPQC" if qvs < 20 else ("STANDARD" if qvs < 80 else "LEGACY")
+        discovered_assets.append({
+            "host": host,
+            "ip": ip,
+            "pillars": ["Web/TLS"],
+            "pqc_ready": bool(info.get("pqc_ready", False)),
+            "details": {"tls_version": info.get("tls_version", "N/A")},
+            "qvs": qvs,
+            "qvs_evidence": "measured (triad scan)",
+            "tag": tag,
+            "tag_reason": f"QVS {qvs} from the Triad scan's own {info.get('tls_version', 'TLS')} handshake for this host",
+        })
+        seen_hosts.add(host)
+
+    # Aggregate overall bank score across all discovered subdomains
+    qvs_scores = [a.get("qvs", 95) for a in discovered_assets if a.get("qvs") is not None]
+    overall_bank_qvs = round(sum(qvs_scores) / len(qvs_scores)) if qvs_scores else 95
+
+    tag_counts = {
+        "LEGACY": sum(1 for a in discovered_assets if a.get("tag") == "LEGACY"),
+        "STANDARD": sum(1 for a in discovered_assets if a.get("tag") == "STANDARD"),
+        "ELITEPQC": sum(1 for a in discovered_assets if a.get("tag") == "ELITEPQC")
+    }
+
+    _report(97, "Fetching mobile app inventory...")
+    result = {
         "base_domain": base_domain,
         "assets": discovered_assets,
         "total_found": len(discovered_assets),
+        "overall_bank_qvs": overall_bank_qvs,
+        "tag_counts": tag_counts,
         "axfr_success": len(axfr_results) > 0,
         "notes": (
             f"Probed {len(targets_to_probe)} candidates. {len(axfr_results)} AXFR/NS records. "
@@ -667,6 +833,8 @@ def discover_pnb_assets(target_base: str) -> dict:
         ),
         "mobile_apps": fetch_mobile_apps_for_discovery(base_domain)
     }
+    _report(100, "Discovery complete.")
+    return result
 
 def fetch_mobile_apps_for_discovery(domain: str) -> list:
     """Helper to find mobile apps relevant to the domain."""

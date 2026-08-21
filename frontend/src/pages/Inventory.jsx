@@ -157,34 +157,73 @@ const Inventory = () => {
             <thead>
               <tr>
                 <th><input type="checkbox" /></th>
-                 <th>Asset PURL / ID</th>
+                <th>Asset PURL / ID</th>
                 <th>Component Name</th>
+                <th>Version</th>
                 <th>Category</th>
                 <th>Algorithm</th>
+                <th>PQC Tag</th>
+                <th>QVS</th>
                 <th>Risk Profile</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filteredData.map((d, i) => (
-                <tr key={i}>
-                  <td><input type="checkbox" /></td>
-                  <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#1A5ACC' }}>{d.purl || `ASSET-${i+100}`}</td>
-                  <td style={{ fontWeight: 'bold' }}>
-                    {d.component}
-                    {d.source === 'seed' && (
-                      <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--text-dim)', border: '1px solid var(--text-dim)', borderRadius: '4px', padding: '1px 5px' }}>SEED</span>
-                    )}
-                  </td>
-                  <td><span style={{ fontSize: '11px', background: '#f0f0f0', padding: '2px 8px', borderRadius: '4px' }}>{d.category || 'Software'}</span></td>
-                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: d.algorithm?.includes('ML-') ? 'var(--pnb-gold)' : 'var(--pnb-red)' }}>{d.algorithm}</td>
-                  <td><span className={`risk-badge ${d.risk === 'Low' ? 'rb-low' : (d.risk === 'Critical' ? 'rb-critical' : 'rb-high')}`}>{d.risk}</span></td>
-                   <td style={{ display: 'flex', gap: '5px' }}>
-                    <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleView(d)}>View</button>
-                    <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleDelete(d.purl)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
+              {filteredData.map((d, i) => {
+                const isPqc = d.quantumSafe || d.algorithm?.includes('ML-') || d.algorithm?.includes('SLH-') || d.algorithm?.includes('BIKE');
+                // QVS is the single source of truth for the tag — same thresholds
+                // discovery_service.py uses (q<20 ELITEPQC, q<80 STANDARD, else LEGACY)
+                // — so an asset's tag can never disagree between Inventory and Discovery.
+                const qvs = d.qvs !== undefined ? d.qvs : (isPqc ? 0 : (d.risk === 'Critical' ? 100 : (d.risk === 'High' ? 85 : 50)));
+                const tag = d.tag || (qvs < 20 ? 'ELITEPQC' : (qvs < 80 ? 'STANDARD' : 'LEGACY'));
+                const tagColor = tag === 'ELITEPQC' ? '#1A8A1A' : (tag === 'STANDARD' ? '#1A5ACC' : '#C0272D');
+                const tagBg = tag === 'ELITEPQC' ? '#E6F4EA' : (tag === 'STANDARD' ? '#E8F0FE' : '#FCE8E6');
+                // Same "why" explanation Discovery.jsx shows next to its tag —
+                // "LEGACY" alone reads identically for a genuinely outdated
+                // protocol and a modern one using classical (non-PQC) crypto,
+                // which are very different situations. Built client-side since
+                // /data/inventory rows carry the algorithm string (d.algorithm,
+                // which already includes the measured key-exchange group for
+                // TLS 1.3 hosts, e.g. "... (key: x25519)") but no separate
+                // reason field the way discovery_service.py's assets do.
+                const tagReason = d.tag_reason || (
+                  d.quantumSafe == null
+                    ? (d.algorithm && d.algorithm !== 'Unknown' ? `No recognized PQC evidence in: ${d.algorithm}` : 'Not assessed — no algorithm evidence in scan findings')
+                    : d.quantumSafe
+                      ? `Real PQC/hybrid evidence measured: ${d.algorithm}`
+                      : `Classical/vulnerable algorithm measured: ${d.algorithm}`
+                );
+
+                return (
+                  <tr key={i}>
+                    <td><input type="checkbox" /></td>
+                    <td style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#1A5ACC' }}>{d.purl || `ASSET-${i+100}`}</td>
+                    <td style={{ fontWeight: 'bold' }}>
+                      {d.component}
+                      {d.source === 'seed' && (
+                        <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--text-dim)', border: '1px solid var(--text-dim)', borderRadius: '4px', padding: '1px 5px' }}>SEED</span>
+                      )}
+                    </td>
+                    <td style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{d.version || 'v1.0'}</td>
+                    <td><span style={{ fontSize: '11px', background: '#f0f0f0', padding: '2px 8px', borderRadius: '4px' }}>{d.category || 'Software'}</span></td>
+                    <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: d.algorithm?.includes('ML-') ? 'var(--pnb-gold)' : 'var(--pnb-red)' }}>{d.algorithm}</td>
+                    <td>
+                      <span title={tagReason} style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '12px', background: tagBg, color: tagColor, fontFamily: 'var(--mono)', cursor: 'help' }}>
+                        {tag}
+                      </span>
+                      <div style={{ fontSize: '8px', color: '#888', marginTop: '2px', maxWidth: '160px', lineHeight: '1.3' }}>
+                        {tagReason}
+                      </div>
+                    </td>
+                    <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: tagColor }}>{qvs}</td>
+                    <td><span className={`risk-badge ${d.risk === 'Low' ? 'rb-low' : (d.risk === 'Critical' ? 'rb-critical' : 'rb-high')}`}>{d.risk}</span></td>
+                    <td style={{ display: 'flex', gap: '5px' }}>
+                      <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleView(d)}>View</button>
+                      <button className="btn btn-outline btn-sm" style={{ padding: '2px 8px' }} onClick={() => handleDelete(d.purl)}>Delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

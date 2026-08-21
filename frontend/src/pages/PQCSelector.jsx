@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useScan } from '../context/ScanContext';
-import { getPQCAlgorithms, getPQCAudit, selectPQCAlgorithm } from '../api';
+import { getPQCAlgorithms, getPQCAudit, selectPQCAlgorithm, getInventoryData } from '../api';
+
+const ALGO_FAMILY_MATCHERS = [
+  { name: 'ML-KEM (FIPS 203)', color: '#0284c7', test: (a) => a.includes('ML-KEM') || a.includes('Kyber') },
+  { name: 'ML-DSA (FIPS 204)', color: '#9333ea', test: (a) => a.includes('ML-DSA') || a.includes('Dilithium') },
+  { name: 'SLH-DSA (FIPS 205)', color: '#10b981', test: (a) => a.includes('SLH-DSA') || a.includes('SPHINCS') },
+  { name: 'FN-DSA (Falcon)', color: '#f59e0b', test: (a) => a.includes('FN-DSA') || a.includes('Falcon') },
+  { name: 'XMSS-LMS', color: '#16a34a', test: (a) => a.includes('XMSS') || a.includes('LMS') },
+  { name: 'BIKE-HQC', color: '#d97706', test: (a) => a.includes('BIKE') || a.includes('HQC') },
+];
 
 const PILLAR_OPTIONS = [
   { value: 'Web', label: 'Pillar A — Web/TLS', icon: '🌐' },
@@ -27,6 +36,7 @@ const PQCSelector = () => {
   const [auditTable, setAuditTable] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('selector');
+  const [algoDistribution, setAlgoDistribution] = useState([]);
 
   useEffect(() => {
     if (activeData) {
@@ -40,7 +50,25 @@ const PQCSelector = () => {
   useEffect(() => {
     fetchAlgorithms();
     fetchAudit();
+    fetchDistribution();
   }, []);
+
+  const fetchDistribution = async () => {
+    try {
+      const res = await getInventoryData();
+      const items = res.data?.data || res.data || [];
+      const counts = ALGO_FAMILY_MATCHERS.map(fam => ({
+        ...fam,
+        count: items.filter(it => fam.test(it.algorithm || '')).length,
+      }));
+      const total = counts.reduce((sum, c) => sum + c.count, 0);
+      setAlgoDistribution(
+        total > 0
+          ? counts.map(c => ({ name: c.name, color: c.color, val: Math.round((c.count / total) * 100), count: c.count }))
+          : []
+      );
+    } catch (e) { console.error('Failed to fetch algorithm distribution', e); }
+  };
 
   const fetchAlgorithms = async () => {
     try {
@@ -143,6 +171,60 @@ const PQCSelector = () => {
     );
   };
 
+  const PqcPieChart = () => {
+    const data = algoDistribution;
+
+    if (data.length === 0) {
+      return (
+        <div style={{ background: '#fff', padding: '16px 24px', borderRadius: '12px', border: '1px solid #eee', marginBottom: '20px' }}>
+          <h4 style={{ margin: '0 0 4px', fontSize: '13px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>6 NIST PQC ALGORITHMS USAGE & RECOMMENDATION RATIO</h4>
+          <p style={{ margin: 0, fontSize: '11px', color: '#666' }}>No PQC algorithms detected in the current inventory yet — run a scan or add inventory items to populate this chart.</p>
+        </div>
+      );
+    }
+
+    let cumAngle = 0;
+    const slices = data.map(d => {
+      const angle = (d.val / 100) * 360;
+      const startAngle = cumAngle;
+      cumAngle += angle;
+      const radStart = (startAngle - 90) * (Math.PI / 180);
+      const radEnd = (cumAngle - 90) * (Math.PI / 180);
+      const x1 = 90 + 70 * Math.cos(radStart);
+      const y1 = 90 + 70 * Math.sin(radStart);
+      const x2 = 90 + 70 * Math.cos(radEnd);
+      const y2 = 90 + 70 * Math.sin(radEnd);
+      const largeArc = angle > 180 ? 1 : 0;
+      const pathData = `M 90 90 L ${x1} ${y1} A 70 70 0 ${largeArc} 1 ${x2} ${y2} Z`;
+      return { ...d, pathData };
+    });
+
+    return (
+      <div style={{ background: '#fff', padding: '16px 24px', borderRadius: '12px', border: '1px solid #eee', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '30px' }}>
+        <div>
+          <h4 style={{ margin: '0 0 4px', fontSize: '13px', color: 'var(--pnb-red)', fontFamily: 'var(--mono)' }}>6 NIST PQC ALGORITHMS USAGE & RECOMMENDATION RATIO</h4>
+          <p style={{ margin: '0 0 12px', fontSize: '11px', color: '#666' }}>Distribution across 5 infrastructure pillars & compliance roadmaps.</p>
+          <svg viewBox="0 0 180 180" style={{ width: '150px', height: '150px' }}>
+            {slices.map((s, i) => (
+              <path key={i} d={s.pathData} fill={s.color} stroke="#fff" strokeWidth="1.5" />
+            ))}
+            <circle cx="90" cy="90" r="35" fill="#fff" />
+            <text x="90" y="94" textAnchor="middle" fontSize="12" fontWeight="700" fill="var(--pnb-red)" fontFamily="var(--mono)">6 PQC</text>
+          </svg>
+        </div>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '11px', fontFamily: 'var(--mono)' }}>
+          {data.map((d, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#f9f9f9', padding: '6px 10px', borderRadius: '6px' }}>
+              <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: d.color }}></div>
+              <span style={{ fontWeight: 600, flex: 1 }}>{d.name}</span>
+              <span style={{ color: 'var(--pnb-gold)', fontWeight: 700 }}>{d.val}% ({d.count})</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: '0' }}>
       {/* Header */}
@@ -174,6 +256,8 @@ const PQCSelector = () => {
           </button>
         ))}
       </div>
+
+      <PqcPieChart />
 
       {/* ── TAB: PQC Selector ── */}
       {activeTab === 'selector' && (

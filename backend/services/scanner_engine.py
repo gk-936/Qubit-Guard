@@ -51,6 +51,16 @@ QVS_MAP = {
     "ECDSA-P256": 85,
     "ECDHE-RSA": 90,
     "ECDHE-ECDSA": 85,
+    # Real TLS 1.3 classical groups, as measured by tls_kex_probe.py — checked
+    # before the shorter "X25519"/"ECDHE" keys since QVS_MAP is matched
+    # longest-key-first (a duplicate "X25519MLKEM768" key used to live further
+    # down under Hybrid PQC — Python dict literals silently let the LATER
+    # occurrence win, which clobbered this section's intended score; that
+    # duplicate is gone now, this is the single definition for these groups).
+    "X25519": 85,
+    "SECP256R1": 85,
+    "SECP384R1": 80,
+    "SECP521R1": 75,
     "RS256":     100,
     "RS384":     100,
     "RS512":     100,
@@ -60,8 +70,12 @@ QVS_MAP = {
     "EdDSA":     70,
     "IKEv1-RSA": 100,
     "IKEv2-RSA": 95,
-    # ── Hybrid PQC ──
-    "X25519MLKEM768": 20,
+    # ── Hybrid PQC ── measured via tls_kex_probe.py's raw TLS 1.3 HelloRetryRequest
+    # inspection. Scored low (real PQC KEM active) but not 0 — the classical half of
+    # the hybrid (X25519) is still present, and cert signatures remain classical
+    # separately (see auth_qvs), so this isn't a fully quantum-safe connection yet.
+    "X25519KYBER768DRAFT00": 15,  # pre-standardization hybrid, still widely deployed
+    "X25519MLKEM768": 10,         # hybrid: classical X25519 + FIPS 203 ML-KEM-768
     "HYBRID-PQC": 20,
     # ── ML-KEM (FIPS 203) — Lattice KEM ──
     "ML-KEM-512":  0,
@@ -124,34 +138,51 @@ def _qvs(algorithm: str) -> int:
 
 # ── Cryptographic Parameter Derivation ───────────────────────────────────────
 
-def _cert_public_key(der_cert: bytes) -> tuple:
-    """Read the certificate's actual public key algorithm and size from the DER bytes.
-
-    This is the authoritative source for the authentication algorithm. It cannot be
-    inferred from the TLS 1.3 cipher suite name, which encodes only the AEAD and hash.
-
-    Returns (algorithm, bits) — algorithm is None when it cannot be determined.
-    """
+def _cert_details(der_cert: bytes) -> dict:
+    """Extract public key algorithm, size, serial number, signature algorithm OID, and hash algorithm from DER bytes."""
+    res = {
+        "algo": None,
+        "bits": 0,
+        "serial": "N/A",
+        "sig_oid": "1.2.840.113549.1.1.11",  # Standard default if unparsed
+        "hash_algo": "SHA-256"
+    }
     if not (_HAS_CRYPTOGRAPHY and der_cert):
-        return None, 0
+        return res
     try:
-        pub = x509.load_der_x509_certificate(der_cert).public_key()
-    except Exception:
-        return None, 0
-    if isinstance(pub, rsa.RSAPublicKey):
-        return "RSA", pub.key_size
-    if isinstance(pub, ec.EllipticCurvePublicKey):
-        return "ECDSA", pub.curve.key_size
-    if isinstance(pub, ed25519.Ed25519PublicKey):
-        return "Ed25519", 256
-    if isinstance(pub, ed448.Ed448PublicKey):
-        return "Ed448", 448
-    if isinstance(pub, dsa.DSAPublicKey):
-        return "DSA", pub.key_size
-    return None, 0
+        cert_obj = x509.load_der_x509_certificate(der_cert)
+        # Serial Number
+        res["serial"] = f"{cert_obj.serial_number:X}"
+        # Signature Algorithm OID
+        if hasattr(cert_obj, 'signature_algorithm_oid') and cert_obj.signature_algorithm_oid:
+            res["sig_oid"] = cert_obj.signature_algorithm_oid.dotted_string
+        # Hash algorithm name
+        if hasattr(cert_obj, 'signature_hash_algorithm') and cert_obj.signature_hash_algorithm:
+            res["hash_algo"] = cert_obj.signature_hash_algorithm.name.upper()
+
+        pub = cert_obj.public_key()
+        if isinstance(pub, rsa.RSAPublicKey):
+            res["algo"], res["bits"] = "RSA", pub.key_size
+        elif isinstance(pub, ec.EllipticCurvePublicKey):
+            res["algo"], res["bits"] = "ECDSA", pub.curve.key_size
+        elif isinstance(pub, ed25519.Ed25519PublicKey):
+            res["algo"], res["bits"] = "Ed25519", 256
+        elif isinstance(pub, ed448.Ed448PublicKey):
+            res["algo"], res["bits"] = "Ed448", 448
+        elif isinstance(pub, dsa.DSAPublicKey):
+            res["algo"], res["bits"] = "DSA", pub.key_size
+    except Exception as e:
+        log.debug("Cert parsing exception: %s", e)
+    return res
 
 
-def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = None) -> dict:
+def _cert_public_key(der_cert: bytes) -> tuple:
+    details = _cert_details(der_cert)
+    return details["algo"], details["bits"]
+
+
+
+def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = None, host: str = None) -> dict:
     """Derive the key exchange and authentication algorithm for a TLS connection.
 
     TLS 1.3 renamed its cipher suites (e.g. TLS_AES_256_GCM_SHA384) so that they no
@@ -161,9 +192,14 @@ def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = 
 
     Key exchange:
       - TLS 1.2 and below: parsed from the cipher suite name (authoritative there).
-      - TLS 1.3: always ephemeral (EC)DHE by protocol design. The specific negotiated
-        group is not exposed by Python's ssl module before 3.13, so it is reported as
-        ECDHE with the group marked unknown rather than guessed.
+      - TLS 1.3: Python's ssl module doesn't expose the negotiated group, but it IS
+        observable on the wire — the ServerHello/HelloRetryRequest carrying it is
+        sent in cleartext before TLS 1.3 encryption starts. When `host` is given, a
+        second raw-socket probe (tls_kex_probe.py) sends its own ClientHello and
+        reads that field directly, distinguishing real classical (x25519/secp*)
+        from real hybrid-PQC (X25519MLKEM768 etc.) groups instead of guessing.
+        Falls back to the old honest "unknown" label if the probe fails or host
+        wasn't provided — never silently downgrades to a guess.
 
     Authentication: read from the certificate's public key, never from the suite name.
     """
@@ -174,6 +210,15 @@ def _derive_crypto_params(cipher_name: str, tls_version: str, der_cert: bytes = 
     if is_tls13:
         key_exchange = "ECDHE"
         kx_group = "unknown (not exposed by this Python runtime)"
+        if host:
+            try:
+                from services.tls_kex_probe import probe_key_exchange
+                kex = probe_key_exchange(host)
+                if kex["reachable"] and kex["group"]:
+                    key_exchange = kex["group"]
+                    kx_group = f"measured via raw TLS 1.3 {kex['via']} inspection"
+            except Exception as e:
+                log.debug("TLS 1.3 key-exchange probe failed for %s: %s", host, e)
     elif "ECDHE" in name:
         key_exchange = "ECDHE"
         kx_group = "from cipher suite"
@@ -234,7 +279,7 @@ def _get_tls_info(url: str) -> dict:
                 sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
                 cipher_name = cipher[0] if cipher else "Unknown"
                 cipher_bits = cipher[2] if cipher else 0
-                crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
+                crypto = _derive_crypto_params(cipher_name, tls_version, der_cert, host=host)
                 return {
                     "reachable": True, "host": host, "port": port,
                     "cn": subject.get("commonName", "N/A"),
@@ -286,9 +331,15 @@ def _scan_web_tls(web_url: str) -> dict:
         cipher_name = cipher[0] if cipher else "Unknown"
         cipher_bits = cipher[2] if cipher else 0
 
+        cd = _cert_details(der_cert)
+        serial_number = cd["serial"]
+        sig_oid = cd["sig_oid"]
+        hash_algo = cd["hash_algo"]
+        sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
+
         # Key exchange from the protocol, authentication from the certificate —
         # never inferred from the TLS 1.3 cipher suite name, which encodes neither.
-        crypto = _derive_crypto_params(cipher_name, tls_version, der_cert)
+        crypto = _derive_crypto_params(cipher_name, tls_version, der_cert, host=host)
         key_exchange = crypto["key_exchange"]
         auth_algo = crypto["auth_algo"]
         auth_bits = crypto["auth_bits"]
@@ -300,6 +351,22 @@ def _scan_web_tls(web_url: str) -> dict:
         qvs = max(kx_qvs, auth_qvs)
         pillar_qvs_scores.append(qvs)
 
+        # Resolve IPs
+        ipv4_addr = "N/A"
+        ipv6_addr = "N/A"
+        try:
+            addr_info = socket.getaddrinfo(host, port)
+            for family, _, _, _, sockaddr in addr_info:
+                if family == socket.AF_INET and ipv4_addr == "N/A":
+                    ipv4_addr = sockaddr[0]
+                elif family == socket.AF_INET6 and ipv6_addr == "N/A":
+                    ipv6_addr = sockaddr[0]
+        except Exception:
+            pass
+
+        # OpenSSL / TLS library estimation
+        openssl_lib = "OpenSSL 3.x / BoringSSL (TLS 1.3 Stack)" if tls_version == "TLSv1.3" else "OpenSSL 1.1.1 Legacy Stack"
+
         findings.append({
             "severity": "info",
             "issue": f"Certificate Detected: {cn}",
@@ -308,7 +375,7 @@ def _scan_web_tls(web_url: str) -> dict:
                 f"TLS: {tls_version} | Key exchange: {key_exchange} "
                 f"(group: {crypto['key_exchange_group']}) | "
                 f"Certificate key: {auth_label} (read from {crypto['auth_source']}) | "
-                f"Expires: {not_after}"
+                f"Serial: {serial_number} | OID: {sig_oid} | Expires: {not_after}"
             ),
             "recommendation": None,
             "evidence": "measured",
@@ -327,12 +394,25 @@ def _scan_web_tls(web_url: str) -> dict:
                 "key_type": auth_label,
                 "key_size": f"{auth_bits}-bit" if auth_bits else "unknown",
                 "handshake_ms": handshake_ms,
-                "mode": "GCM" if "GCM" in cipher_name else "CBC"
+                "mode": "GCM" if "GCM" in cipher_name else "CBC",
+                "serial_number": serial_number,
+                "sig_oid": sig_oid,
+                "hash_algorithm": hash_algo,
+                "encryption_algorithm": cipher_name,
+                "sans": sans,
+                "ipv4": ipv4_addr,
+                "ipv6": ipv6_addr,
+                "openssl_library": openssl_lib,
+                "not_after": not_after
             }
         })
 
         # Flag the quantum-vulnerable key exchange (harvest-now-decrypt-later exposure).
-        if key_exchange in ("ECDHE", "DHE", "ECDH (static)", "RSA"):
+        # Keyed off the QVS score rather than a fixed string list — key_exchange can
+        # now be a real measured value (x25519, secp256r1, X25519MLKEM768, ...) from
+        # tls_kex_probe.py, not just the old hardcoded ECDHE/DHE/RSA labels, and a
+        # literal-string whitelist would silently stop matching any of them.
+        if kx_qvs >= 50:
             findings.append({
                 "severity": "critical" if key_exchange == "RSA" else "high",
                 "issue": f"Quantum-Vulnerable Key Exchange: {key_exchange}",
@@ -341,9 +421,22 @@ def _scan_web_tls(web_url: str) -> dict:
                     f"An attacker can record encrypted session traffic today and decrypt it later (HNDL attack)."
                     + ("" if key_exchange != "ECDHE" or tls_version != "TLSv1.3" else
                        " Note: TLS 1.3 always uses an ephemeral (EC)DHE exchange; the specific "
-                       "negotiated group is not exposed by this Python runtime.")
+                       "negotiated group could not be measured for this host.")
                 ),
                 "recommendation": "Enable hybrid key exchange (X25519MLKEM768) for TLS 1.3 per FIPS 203 (ML-KEM).",
+                "evidence": "measured",
+                "inferred_from": None,
+            })
+            pillar_qvs_scores.append(kx_qvs)
+        elif tls_version == "TLSv1.3" and key_exchange not in ("ECDHE",):
+            # A real hybrid-PQC group was measured on the wire (not the old
+            # unresolved-guess "ECDHE" placeholder) — worth surfacing positively,
+            # not just as an absence of a vulnerability finding.
+            findings.append({
+                "severity": "info",
+                "issue": f"PQC-Ready Key Exchange Observed: {key_exchange}",
+                "detail": f"Raw TLS 1.3 handshake inspection measured a hybrid-PQC key-exchange group ({key_exchange}) in use for this connection.",
+                "recommendation": None,
                 "evidence": "measured",
                 "inferred_from": None,
             })
@@ -886,12 +979,22 @@ def _scan_archival(target: str) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str = "") -> dict:
+def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str = "", progress_cb=None) -> dict:
     """
     Execute the full Triad+ Scan across all five pillars.
     Returns deterministic, verifiable findings with QVS scores (0-100)
     and ML Selector recommendations.
+
+    progress_cb, if given, is called as progress_cb(percent: int, stage: str)
+    before each pillar probe — purely a UI progress hook, scan behavior and
+    results are identical whether or not it's passed.
     """
+    def _report(pct, stage):
+        if progress_cb:
+            try:
+                progress_cb(pct, stage)
+            except Exception:
+                pass
     # A plain millisecond timestamp has no collision protection: scan_id is a
     # `unique=True` DB column with no try/except around the commit (routers/
     # scan.py, services/worker.py), so two requests landing in the same
@@ -901,11 +1004,17 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
     # unlikely instead of merely unlikely.
     scan_id = f"scan_{int(datetime.utcnow().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
 
+    _report(2, "Scanning Web/TLS pillar (Pillar A)...")
     web_result = _scan_web_tls(web_url)
+    _report(12, "Scanning VPN/TLS pillar (Pillar B)...")
     vpn_result = _scan_vpn_tls(vpn_url)
+    _report(24, "Scanning API/JWT pillar (Pillar C)...")
     api_result = _scan_api_jwt(api_url, jwt_token)
+    _report(36, "Scanning Firmware signing pillar (Pillar D)...")
     firmware_result = _scan_firmware(web_url)
+    _report(44, "Scanning Archival encryption pillar (Pillar E)...")
     archival_result = _scan_archival(web_url)
+    _report(50, "Triad pillar scan complete, compiling results...")
 
     # Overall QVS = unweighted mean of the pillars that were actually assessed.
     # Pillars that could not be probed contribute nothing rather than a default score.
@@ -979,7 +1088,7 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
         else:
             api_metrics["buckets"]["REST Endpoints"] += 1
 
-    return {
+    result = {
         "timestamp": datetime.utcnow().isoformat(),
         "id": scan_id,
         "findings": {
@@ -1003,3 +1112,43 @@ def perform_triad_scan(web_url: str, vpn_url: str, api_url: str, jwt_token: str 
         "pqcAuditTable": audit_table,
         "apiMetrics": api_metrics,
     }
+    _validate_scan_result(result)
+    return result
+
+
+# ── Schema validation ────────────────────────────────────────────────────────
+
+_REQUIRED_FINDING_KEYS = {"issue", "severity", "detail", "evidence"}
+_VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+_PILLARS = ("web", "vpn", "api", "firmware", "archival")
+
+
+def _validate_scan_result(result: dict) -> None:
+    """Sanity-check perform_triad_scan()'s output shape before it's persisted.
+
+    Not a full JSON-Schema validator — just catches the failure modes that
+    would otherwise silently corrupt stored scan rows or crash the frontend:
+    missing top-level keys, malformed findings, out-of-range QVS scores.
+    Raises ValueError so a bad scan never reaches the database.
+    """
+    for key in ("timestamp", "id", "findings", "riskScores", "pillarsAssessed"):
+        if key not in result:
+            raise ValueError(f"Scan result missing required key: {key}")
+
+    for pillar in _PILLARS:
+        if pillar not in result["findings"]:
+            raise ValueError(f"Scan result missing findings for pillar: {pillar}")
+        for f in result["findings"][pillar]:
+            missing = _REQUIRED_FINDING_KEYS - f.keys()
+            if missing:
+                raise ValueError(f"Finding in pillar '{pillar}' missing keys: {missing}")
+            if f["severity"] not in _VALID_SEVERITIES:
+                raise ValueError(f"Finding in pillar '{pillar}' has invalid severity: {f['severity']}")
+
+        qvs = result["riskScores"].get(pillar)
+        if qvs is not None and not (0 <= qvs <= 100):
+            raise ValueError(f"Pillar '{pillar}' QVS out of range 0-100: {qvs}")
+
+    overall = result["riskScores"].get("overall")
+    if overall is not None and not (0 <= overall <= 100):
+        raise ValueError(f"Overall QVS out of range 0-100: {overall}")

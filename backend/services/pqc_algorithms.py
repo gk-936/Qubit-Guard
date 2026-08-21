@@ -71,7 +71,7 @@ PQC_ALGORITHM_REGISTRY = {
         "fips_standard": "FIPS 204",
         "formal_name": "Module-Lattice-Based Digital Signature Algorithm",
         "aliases": ["Dilithium", "ML-DSA", "CRYSTALS-Dilithium"],
-        "oid": "1.3.6.1.4.1.2.267.12",
+        "oid": "2.16.840.1.101.3.4.3.18",
         "fips_status": "Finalized",
         "fips_date": "2024-08-13",
         "algorithm_type": "Signature",

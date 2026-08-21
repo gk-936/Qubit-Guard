@@ -50,13 +50,20 @@ def _provenance(db: Session, *models) -> dict:
 
 
 def _cyber_rating(overall) -> dict:
-    """Build the Cyber Rating card. A null QVS means no pillar was assessed —
-    it must not be graded as a tier, since that would read as a real result."""
+    """Build the Cyber Rating card, using the exact same 1000-point formula
+    and Legacy/Standard/Elite-PQC thresholds as the dedicated Cyber Rating
+    page (frontend/src/pages/Rating.jsx) — this used to compute its own
+    independent "Tier 1/2/4" label (note: no Tier 3 branch existed at all,
+    so any QVS from 50-99 was mislabeled Tier 4/Critical), which could
+    disagree with what a user sees after clicking through to that page for
+    the very same scan. A null QVS means no pillar was assessed — it must
+    not be graded as a tier, since that would read as a real result."""
     if overall is None:
         return {"value": "Not Assessed", "label": "Cyber Rating",
                 "subtext": "No pillar could be probed"}
-    tier = "Tier 1" if overall < 20 else "Tier 2" if overall < 50 else "Tier 4"
-    return {"value": tier, "label": "Cyber Rating", "subtext": f"QVS: {overall}"}
+    score = max(0, 1000 - (overall * 8))
+    tier = "Elite-PQC" if score > 700 else "Standard" if score > 400 else "Legacy"
+    return {"value": f"{score}/1000", "label": "Cyber Rating", "subtext": f"{tier} · QVS: {overall}"}
 
 
 @router.get("/dashboard")

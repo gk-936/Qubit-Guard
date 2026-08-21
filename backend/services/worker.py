@@ -110,7 +110,7 @@ async def run_automated_scan_and_email(schedule_id: int):
         # We need to map some fields to what the mail service expects
         scan_data = {
             "reportType": report_type.upper(),
-            "formats": ["pdf"],
+            "formats": ["pdf", "xml", "json", "csv"],
             "riskScores": scan_results["riskScores"],
             "cbom": cbom,
             "findings": scan_results["findings"], # The raw ones
