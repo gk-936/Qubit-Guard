@@ -18,12 +18,16 @@ const Reporting = () => {
 
   const handleExportCanonical = async (fmt) => {
     setExporting(fmt);
+    showToast(`Generating canonical ${fmt.toUpperCase()} report...`, 'info');
     try {
-      const res = await exportCanonicalReport(fmt, activeScanId || undefined);
+      const scanIdToUse = activeScanId || undefined;
+      const res = await exportCanonicalReport(fmt, scanIdToUse);
       saveBlob(res.data, `qubit-guard-report-${activeScanId || 'latest'}.${fmt}`);
+      showToast(`Exported canonical ${fmt.toUpperCase()} report successfully.`, 'success');
     } catch (e) {
       console.error(`Canonical ${fmt} export failed`, e);
-      showToast(`Could not export the ${fmt.toUpperCase()} report — has a scan been run yet?`, 'error');
+      const errMsg = e?.response?.data?.message || `Could not export the ${fmt.toUpperCase()} report — please verify a scan has been performed.`;
+      showToast(errMsg, 'error');
     } finally {
       setExporting(null);
     }
@@ -197,6 +201,9 @@ const Reporting = () => {
                   onChange={e => setScheduledEmail(e.target.value)}
                   style={{ width: '100%', padding: '10px' }}
                 />
+                <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button className="btn btn-gold" style={{ padding: '10px 24px' }} onClick={handleSaveSchedule}>Save Schedule</button>
+                </div>
               </div>
             </div>
           </div>
@@ -222,14 +229,6 @@ const Reporting = () => {
               {sending ? 'SENDING...' : 'SEND TO EMAIL'}
             </button>
           </div>
-        </div>
-
-        <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button className="btn btn-gold" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('pdf')}>Download PDF</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('json')}>Download JSON</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('xml')}>Download XML</button>
-          <button className="btn btn-outline" style={{ padding: '12px 20px' }} onClick={() => handleExportFormat('csv')}>Download CSV</button>
-          <button className="btn btn-gold" style={{ padding: '12px 20px', marginLeft: 'auto' }} onClick={handleSaveSchedule}>Save Schedule</button>
         </div>
 
         <div style={{ marginTop: '30px', borderTop: '1px solid #f0f0f0', paddingTop: '20px' }}>

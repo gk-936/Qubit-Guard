@@ -57,9 +57,16 @@ def _probe_single(host: str, path: str, is_api_sub: bool) -> dict:
     try:
         req = urllib.request.Request(
             url, method="HEAD",
-            headers={"User-Agent": "QuantumShield-Scanner/2.0", "Accept": "application/json"},
+            headers={"User-Agent": "QuantumShield-Scanner/2.0", "Accept": "application/json, */*"},
         )
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            content_type = resp.headers.get("Content-Type", "").lower()
+            # If a specialized backend API path returns a 200 OK with generic text/html,
+            # it is a front-end SPA / catch-all router, not a real REST API endpoint.
+            is_doc_or_root = path in ["/", "/swagger.json", "/openapi.json", "/api-docs", "/graphql", "/.well-known/openid-configuration"]
+            if resp.status == 200 and "text/html" in content_type and not is_doc_or_root:
+                return None
+
             if resp.status < 500:
                 return {
                     "url": url,

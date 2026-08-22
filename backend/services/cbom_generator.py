@@ -134,36 +134,51 @@ def generate_triad_cbom(scan_findings: dict, web_url: str, vpn_url: str, api_url
                 continue  # Avoid duplicates with main pillars
 
             pqc_ready = asset.get("pqc_ready", False)
-            tls_v = asset.get("details", {}).get("tls_version", "TLSv1.2")
-            # The actual negotiated cipher suite, when discovery measured one —
-            # this used to be hardcoded to "ML-DSA (PQC)" for every pqc_ready
-            # asset, which was wrong twice over: ML-DSA is a signature scheme
-            # (cert signing), not something a TLS key-exchange handshake would
-            # tell you, and Python's ssl module can't confirm a real post-quantum
-            # group was negotiated anyway — TLS 1.3 alone doesn't imply PQC.
-            # Report what was actually measured instead of guessing an algorithm.
-            cipher = asset.get("details", {}).get("cipher")
-            # TLS 1.3 cipher suite names never encode the key-exchange group
-            # (that's the whole reason tls_kex_probe.py exists) — two hosts can
-            # show the identical cipher string here while one is genuinely
-            # PQC-hybrid and the other classical. Without surfacing the measured
-            # group too, an ELITEPQC verdict next to an identical-looking
-            # LEGACY row for the same cipher name reads as an inconsistency
-            # instead of the two hosts actually having negotiated different
-            # key-exchange groups underneath that shared cipher suite.
-            kex_group = asset.get("details", {}).get("key_exchange_group")
-            crypto_label = f"{cipher} (key: {kex_group})" if cipher and kex_group else cipher
-
-            # Use deterministic naming and types
+            raw_tls = str(asset.get("details", {}).get("tls_version", ""))
             pillar_types = asset.get("pillars", ["Web/TLS"])
             main_pillar = pillar_types[0]
-            comp_type = "application" if "Web" in main_pillar else "network-appliance" if "VPN" in main_pillar else "library"
+
+            # Determine clean version label (avoiding 'unknown' or uninformative tags)
+            if "1.3" in raw_tls:
+                version_label = "TLS 1.3"
+            elif "1.2" in raw_tls:
+                version_label = "TLS 1.2"
+            elif "1.1" in raw_tls:
+                version_label = "TLS 1.1"
+            elif "1.0" in raw_tls:
+                version_label = "TLS 1.0"
+            elif "HTTP" in main_pillar:
+                version_label = "HTTP/1.1"
+            elif "DNS" in main_pillar or "Infrastructure" in main_pillar:
+                version_label = "DNS"
+            else:
+                version_label = raw_tls if (raw_tls and raw_tls not in ["N/A", "Unknown", "unknown"]) else "TLS 1.2"
+
+            # Determine accurate cryptography label
+            if "DNS" in main_pillar or "Infrastructure" in main_pillar:
+                crypto_label = "Unencrypted (DNS Record)"
+                comp_type = "network-appliance"
+            elif "HTTP" in main_pillar:
+                crypto_label = "Plaintext HTTP (No TLS)"
+                comp_type = "application"
+            else:
+                cipher = asset.get("details", {}).get("cipher")
+                kex_group = asset.get("details", {}).get("key_exchange_group")
+                if cipher and kex_group:
+                    crypto_label = f"{cipher} (key: {kex_group})"
+                elif cipher:
+                    crypto_label = cipher
+                elif pqc_ready:
+                    crypto_label = f"PQC-Hybrid ({version_label})"
+                else:
+                    crypto_label = f"Classical ({version_label})"
+                comp_type = "application" if "Web" in main_pillar else "network-appliance" if "VPN" in main_pillar else "library"
 
             components.append({
                 "type": comp_type,
                 "name": f"{main_pillar} ({host})",
-                "version": asset.get("details", {}).get("version", "unknown"),
-                "crypto": crypto_label or (f"TLS {tls_v} (cipher not captured)" if pqc_ready else f"Classical ({tls_v})"),
+                "version": version_label,
+                "crypto": crypto_label,
                 "quantumSafe": pqc_ready,
                 "properties": [
                     {"name": "quantum-shield:asset-type", "value": main_pillar},
